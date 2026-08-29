@@ -72,17 +72,17 @@ df = cq.data.ashare.kline.get(
 
 - **参数说明 (Args)**:
   - `freq` (`str`, 可选): K 线频率，默认 `"1d"`。支持 `"1d"` (日线), `"5m"` (5分钟线), `"1m"` (1分钟线)。
-  - `adj` (`str`, 可选): 复权方式，默认 `"raw"` (不复权)。支持 `"raw"`, `"adj"` (后复权)。
+  - `adj` (`str`, 可选): 复权方式，默认 `"raw"` (不复权)。支持 `"raw"` (不复权) 与 `"adj"` (后复权)。
+    - **默认 `"raw"` (零开销纯净直读)**：不产生任何因子表 IO 与内存 Join，以最快速度直读原始行情；
+    - **显式 `"adj"` (动态后复权引擎)**：自动读取底层原始 K 线与 Baostock 权威复权因子表，按 `[symbol, date]` 向量化折算 `open`, `high`, `low`, `close`, `preclose` 价格列，具备完备的停牌保护、高频分钟线跨频对齐与历史短切片前向继承。
   - `symbols` (`str` 或 `List[str]`, 可选): 代码或代码列表 (例如 `"sh.600000"` 或 `["sh.600000", "sz.000001"]`)。为 `None` 时读取该表全量代码。
   - `start_date` (`str`, 可选): 起始日期，格式 `"YYYY-MM-DD"` (例如 `"2024-01-01"`)。
   - `end_date` (`str`, 可选): 结束日期，格式 `"YYYY-MM-DD"` (例如 `"2024-06-30"`)。
   - `columns` (`List[str]`, 可选): 选挑投影字段列表 (例如 `["timestamp", "close", "volume"]`)。
-  - `source` (`str`, 可选): 显式指定数据源 (如 `"baostock"`, `"tdx"`)。若未指定则由 `DefaultConfig` 继承链决定。
-  - `format` (`str`, 可选): 存储格式 (如 `"parquet"`, `"csv"`, `"auto"`)。若未指定由 `DefaultConfig` 继承链决定。
+  - `source` (`str`, 可选): 显式指定 K 线数据源 (如 `"baostock"`, `"tdx"`)。若未指定则由 `DefaultConfig` 继承链决定。
+  - `format` (`str`, 可选): K 线存储格式 (如 `"parquet"`, `"csv"`, `"auto"`)。若未指定由 `DefaultConfig` 继承链决定。
 - **返回值 (Returns)**:
   - `pl.DataFrame`: 包含时间戳与 K 线指标的 Polars DataFrame。
-- **说明**:
-  - 若拼装出的组合不受底层数据源支持（例如 `freq="1d", adj="adj", source="tdx"`），会自动抛出 `ValueError`。
 
 ---
 
@@ -149,12 +149,12 @@ df_inst = cq.data.ashare.inst_trade.get(symbols=None, start_date=None, end_date=
 
 #### 3.1.5 `cq.data.default` / `cq.data.ashare.default` / `cq.data.ashare.kline.default`
 
-三层链式默认值配置对象。
+三层链式默认值配置对象（专一管理底层物理存储配置）。
 
 ```python
-cq.data.default.source = "tdx"                      # 1. 全局默认
-cq.data.ashare.default.source = "baostock"           # 2. 市场级默认
-cq.data.ashare.kline.default.source = "tdx"          # 3. 表级默认
+cq.data.default.source = "tdx"                      # 1. 全局默认数据源
+cq.data.ashare.default.source = "baostock"           # 2. 市场级默认数据源
+cq.data.ashare.kline.default.format = "parquet"     # 3. 表级默认存储格式
 ```
 
 - **属性说明**:

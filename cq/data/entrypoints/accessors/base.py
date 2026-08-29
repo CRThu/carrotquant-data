@@ -100,6 +100,17 @@ class _BaseTable:
         resolved_format = format if format is not None else self.default.resolve_format()
         return resolved_source, resolved_format
 
+    @staticmethod
+    def _apply_columns(df: pl.DataFrame, columns: Optional[Union[str, List[str]]]) -> pl.DataFrame:
+        """按需进行列投影选择 (只选择指定的列返回)"""
+        if df.is_empty() or not columns:
+            return df
+        col_list = [columns] if isinstance(columns, str) else columns
+        valid_cols = [c for c in col_list if c in df.columns]
+        if not valid_cols:
+            return df
+        return df.select(valid_cols)
+
     def _validate_table_id(self, table_id: str) -> None:
         """检查拼装出的 table_id 是否受底层数据源支持，不存在则抛出清晰的 ValueError"""
         try:

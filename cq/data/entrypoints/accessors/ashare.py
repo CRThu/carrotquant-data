@@ -8,12 +8,15 @@ from typing import List, Optional, Union
 import polars as pl
 
 from cq.data.entrypoints.accessors.base import _BaseTable, DefaultConfig
+from cq.data.service.data_adjuster import DataAdjuster
 
 
 class AShareKline(_BaseTable):
     """A 股个股 K 线快捷访问类"""
     _PREFIX = "ashare.kline"
     _FALLBACK_SOURCE = "baostock"
+    _FACTOR_PREFIX = "ashare.adj_factor"
+    _FACTOR_SOURCE = "baostock"
 
     def get(
         self,
@@ -36,22 +39,60 @@ class AShareKline(_BaseTable):
             start_date: 起始日期 ('YYYY-MM-DD')
             end_date: 结束日期 ('YYYY-MM-DD')
             columns: 选挑字段列表
-            source: 指定数据源 ('baostock', 'tdx' 等)
-            format: 存储格式 ('parquet', 'csv', 'auto')
+            source: 指定 K 线数据源 ('baostock', 'tdx' 等)
+            format: K 线存储格式 ('parquet', 'csv', 'auto')
 
         Returns:
             pl.DataFrame
         """
-        resolved_source, resolved_format = self._resolve_source_format(source, format)
-        table_id = f"{self._PREFIX}.{freq}.{adj}.{resolved_source}"
-        return self._read_table(
-            table_id=table_id,
+        if adj not in ("raw", "adj"):
+            raise ValueError(
+                f"Unsupported adjustment mode '{adj}'. Only 'raw' and 'adj' are supported."
+            )
+
+        resolved_kline_source, resolved_kline_format = self._resolve_source_format(source, format)
+
+        # 1. 默认 raw 极速纯净直读路径 (零因子 IO，零 Join 开销)
+        if adj == "raw":
+            table_id = f"{self._PREFIX}.{freq}.raw.{resolved_kline_source}"
+            return self._read_table(
+                table_id=table_id,
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                columns=columns,
+                format=resolved_kline_format
+            )
+
+        # 2. 动态后复权引擎介入 (adj)
+        raw_table_id = f"{self._PREFIX}.{freq}.raw.{resolved_kline_source}"
+        df_kline = self._read_table(
+            table_id=raw_table_id,
             symbols=symbols,
             start_date=start_date,
             end_date=end_date,
-            columns=columns,
-            format=resolved_format
+            columns=None,
+            format=resolved_kline_format
         )
+        if df_kline.is_empty():
+            return self._apply_columns(df_kline, columns)
+
+        # 读取复权因子表 (不加 start_date 截断，仅限制 <= end_date 以向前追溯历史因子)
+        factor_table_id = f"{self._FACTOR_PREFIX}.{self._FACTOR_SOURCE}"
+        df_factor = self._read_table(
+            table_id=factor_table_id,
+            symbols=symbols,
+            start_date=None,
+            end_date=end_date,
+            columns=None,
+            format=resolved_kline_format
+        )
+
+        # 执行动态向量化后复权计算
+        df_adjusted = DataAdjuster.adjust(df_kline=df_kline, df_factor=df_factor)
+
+        # 过滤用户指定的返回字段
+        return self._apply_columns(df_adjusted, columns)
 
 
 class AShareAdjFactor(_BaseTable):

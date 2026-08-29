@@ -102,10 +102,10 @@
 | **`timestamp`** | `pl.Int64` | 毫秒时间戳 | `1686787200000` |
 
 ### 4.1 各字段复权折算原则 (Adjustment Principles)
-* **参与复权的价格列**：`open`, `high`, `low`, `close`, `preclose`
-  - 后复权 (hfq)：$Price_{hfq} = Price_{raw} \times back\_adj\_factor$
-  - 前复权 (qfq)：$Price_{qfq} = Price_{raw} \times \frac{back\_adj\_factor}{latest\_factor}$
-* **严禁复权的列**：`amount` (真实成交额), `turnover_rate` (换手率), `change_pct` (涨跌幅), 估值指标及状态标记。
+* **参与复权的 5 大价格列**：`open`, `high`, `low`, `close`, `preclose`
+  - 后复权 (adj)：$Price_{adj} = Price_{raw} \times back\_adj\_factor$
+  - （注：系统物理层面彻底禁止不可控且历史会漂移的前复权）
+* **严禁复权的列**：`amount` (真实成交额), `volume` (真实成交量), `turnover_rate` (换手率), `change_pct` (涨跌幅), 估值指标及交易状态标记。
 
 ---
 

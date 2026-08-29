@@ -180,8 +180,9 @@ cq.data.configure("./config.yaml")
 # 或者直接修改属性
 cq.data.settings.data_dir = "./custom_data"
 
-# 1. OOP 便捷读取 (界面极简，干净清爽)
-df_kline = cq.data.ashare.kline.get(symbols="sh.600000", start_date="2024-01-01")
+# 1. OOP 便捷读取 (默认 raw 零开销直读，显式 adj='adj' 自动触发向量化动态后复权)
+df_raw = cq.data.ashare.kline.get(symbols="sh.600000", start_date="2024-01-01")
+df_adj = cq.data.ashare.kline.get(symbols="sh.600000", adj="adj", start_date="2024-01-01")
 
 # 2. 查阅代码清单、时间跨度、Schema 映射与物理总行数
 symbols = cq.data.list_symbols("ashare.kline.1d.raw.baostock")
