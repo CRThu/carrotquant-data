@@ -316,6 +316,7 @@ bun dev
 
 - [Python SDK 使用指南](docs/python_sdk_guide.md)
 - [REST API 接口文档](docs/rest_api_guide.md)
+- [数据字典与 Schema 全量规范](docs/schema_reference.md)
 - [React Web 终端指南](docs/web_terminal_guide.md)
 - [示例代码与脚本](examples/README.md)
 

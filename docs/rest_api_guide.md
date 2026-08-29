@@ -56,6 +56,8 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
 | | `/logs/stream` | `GET` | **【SSE】** Server-Sent Events 全局 Loguru 系统与数据引擎日志实时推送流 |
 | **文件系统探查** | `/filesystem/list` | `GET` | 通用本地文件/目录列表探查 API（为 Web 端文件浏览器 Modal 提供支持） |
 
+> [!TIP]
+> **数据字典与字段速查**：查询接口 (`GET /api/v1/query`) 中 `columns` 过滤支持的具体字段清单、数据类型定义及各数据源（TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
 
 ---
 

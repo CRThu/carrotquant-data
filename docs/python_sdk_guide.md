@@ -44,6 +44,9 @@ import cq.data
 | | `cq.data.configure()` | 显式从 YAML 配置文件装载全局配置 |
 | | `cq.data.settings` | 全局 Settings 实例 (可直接访问与修改属性) |
 
+> [!TIP]
+> **数据字典与字段速查**：各数据表支持的具体字段清单、数据类型定义及各数据源（TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
+
 ---
 
 ## 3. 全量 API 详尽参数与返回值说明
