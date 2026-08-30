@@ -44,7 +44,8 @@ class MockCustomProvider(BaseProvider):
 def test_register_provider_class():
     """测试通过类注册自定义 Provider"""
     pm = ProviderManager()
-    register_provider("my_source", MockCustomProvider)
+    res = register_provider("my_source", MockCustomProvider)
+    assert res is MockCustomProvider
     
     provider = pm.get_provider("custom.kline.1d.my_source", api_key="test_123")
     assert isinstance(provider, MockCustomProvider)
@@ -52,11 +53,67 @@ def test_register_provider_class():
     assert provider.get_all_symbols("custom.kline.1d.my_source") == ["custom.001", "custom.002"]
 
 
+def test_register_provider_decorator_positional():
+    """测试通过位置参数类装饰器注册自定义 Provider"""
+    pm = ProviderManager()
+
+    @register_provider("decor_pos_source")
+    class DecoratedPosProvider(BaseProvider):
+        def fetch(self, table_id: str, symbol: str, start_time: int = None, end_time: int = None) -> pl.DataFrame:
+            return pl.DataFrame({"symbol": [symbol], "timestamp": [1704067200000], "close": [10.5]})
+
+        def get_all_symbols(self, table_id: str) -> list[str]:
+            return ["decor.001"]
+
+        def get_supported_tables(self) -> list[str]:
+            return ["custom.kline.1d.decor_pos_source"]
+
+        def get_table_category(self, table_id: str) -> str:
+            return "timeseries"
+
+        def get_sort_keys(self, table_id: str) -> list[str]:
+            return ["timestamp"]
+
+    # 验证装饰器返回原始类本身，类型与属性不丢失
+    assert issubclass(DecoratedPosProvider, BaseProvider)
+    
+    provider = pm.get_provider("custom.kline.1d.decor_pos_source")
+    assert isinstance(provider, DecoratedPosProvider)
+    assert provider.get_all_symbols("custom.kline.1d.decor_pos_source") == ["decor.001"]
+
+
+def test_register_provider_decorator_keyword():
+    """测试通过关键字参数类装饰器注册自定义 Provider"""
+    pm = ProviderManager()
+
+    @register_provider(source="decor_kw_source")
+    class DecoratedKwProvider(BaseProvider):
+        def fetch(self, table_id: str, symbol: str, start_time: int = None, end_time: int = None) -> pl.DataFrame:
+            return pl.DataFrame()
+
+        def get_all_symbols(self, table_id: str) -> list[str]:
+            return []
+
+        def get_supported_tables(self) -> list[str]:
+            return ["custom.kline.1d.decor_kw_source"]
+
+        def get_table_category(self, table_id: str) -> str:
+            return "timeseries"
+
+        def get_sort_keys(self, table_id: str) -> list[str]:
+            return ["timestamp"]
+
+    assert issubclass(DecoratedKwProvider, BaseProvider)
+    provider = pm.get_provider("custom.kline.1d.decor_kw_source")
+    assert isinstance(provider, DecoratedKwProvider)
+
+
 def test_register_provider_instance():
     """测试通过实例注册自定义 Provider"""
     pm = ProviderManager()
     instance = MockCustomProvider(api_key="instance_key")
-    ProviderManager.register_provider("my_source_inst", instance)
+    res = ProviderManager.register_provider("my_source_inst", instance)
+    assert res is instance
     
     provider = pm.get_provider("custom.kline.1d.my_source_inst")
     assert provider is instance
@@ -70,6 +127,17 @@ def test_register_provider_invalid():
         
     with pytest.raises(ValueError):
         ProviderManager.register_provider(None, MockCustomProvider)
+
+    # 装饰器模式下非法 source
+    with pytest.raises(ValueError):
+        @register_provider("")
+        class BadProvider(BaseProvider):
+            pass
+
+    with pytest.raises(ValueError):
+        @register_provider(None)
+        class BadProvider2(BaseProvider):
+            pass
 
 
 class MockCustomEventProvider(BaseProvider):

@@ -53,8 +53,14 @@ def test_write_and_register_provider_delegation():
         assert mock_write.called
 
     with patch("cq.data.provider.provider_manager.ProviderManager.register_provider") as mock_reg:
-        python_api.register_provider("custom_src", MagicMock())
-        assert mock_reg.called
+        mock_cls = MagicMock()
+        python_api.register_provider("custom_src", mock_cls)
+        mock_reg.assert_called_with(source="custom_src", provider=mock_cls)
+
+    with patch("cq.data.provider.provider_manager.ProviderManager.register_provider", return_value=lambda cls: cls) as mock_reg_decor:
+        decorator = python_api.register_provider("custom_decor_src")
+        mock_reg_decor.assert_called_with(source="custom_decor_src", provider=None)
+        assert callable(decorator)
 
 
 

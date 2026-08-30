@@ -225,21 +225,41 @@ result = cq.data.write(
 
 #### 3.2.3 `cq.data.register_provider()`
 
-动态注册外部自定义数据源 Provider 驱动，将其无缝接入 `cq.data.sync()` 调度流水线。
+动态注册外部自定义数据源 Provider 驱动，将其无缝接入 `cq.data.sync()` 调度流水线。支持**类装饰器**与**普通函数调用**两种写法。
+
+**写法 1：类装饰器模式（推荐，即插即用）**
 
 ```python
+import cq.data
 from cq.data.provider.base import BaseProvider
 
+@cq.data.register_provider("my_source")
 class MyCustomProvider(BaseProvider):
     # 实现 fetch, get_all_symbols, get_supported_tables, get_table_category, get_sort_keys
     ...
 
+# 定义后即可直接调度同步
+cq.data.sync("custom.kline.1d.my_source")
+```
+
+**写法 2：普通函数调用模式**
+
+```python
+import cq.data
+from cq.data.provider.base import BaseProvider
+
+class MyCustomProvider(BaseProvider):
+    ...
+
+# 注册类或已实例化的对象
 cq.data.register_provider("my_source", MyCustomProvider)
+# 或
+cq.data.register_provider("my_source", MyCustomProvider(api_key="xxx"))
 ```
 
 - **参数说明 (Args)**:
-  - `source` (`str`, 必填): 数据源标识符（对应 table_id 的末段标识）。
-  - `provider` (`BaseProvider` 或 `Type[BaseProvider]`, 必填): 继承自 `BaseProvider` 的驱动类或实例。
+  - `source` (`str`, 必填): 数据源标识符（对应 table_id 的末段标识，如 `'my_source'`）。
+  - `provider` (`BaseProvider` 或 `Type[BaseProvider]`, 可选): 继承自 `BaseProvider` 的驱动类或实例。若不传（为 `None`），则返回类装饰器闭包。
 
 ---
 

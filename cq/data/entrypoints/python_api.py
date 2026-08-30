@@ -5,7 +5,7 @@ Python SDK API 接入面模块。
 为 Python 量化脚本与交互环境提供干净、专一、直观的高阶函数调用。
 """
 
-from typing import List, Tuple, Dict, Union, Optional, Any
+from typing import List, Tuple, Dict, Union, Optional, Any, Callable
 from pathlib import Path
 import polars as pl
 
@@ -105,15 +105,28 @@ def write(
     )
 
 
-def register_provider(source: str, provider: Any):
+def register_provider(source: str, provider: Optional[Any] = None) -> Union[Any, Callable]:
     """
-    注册自定义数据源 Provider 驱动。
+    注册自定义数据源 Provider 驱动 (支持普通函数调用与类装饰器两种模式)。
+
+    示例 1 (类装饰器模式):
+        @cq.data.register_provider("stockdb")
+        class StockDBProvider(BaseProvider):
+            ...
+
+    示例 2 (普通函数调用模式):
+        cq.data.register_provider("stockdb", StockDBProvider)
+        # 或
+        cq.data.register_provider("stockdb", StockDBProvider())
 
     Args:
-        source: 数据源标识 (table_id 末段)
-        provider: Provider 类或实例 (继承 BaseProvider)
+        source: 数据源标识 (table_id 末段，如 'stockdb')
+        provider: Provider 类或实例 (可选，若为 None 则返回类装饰器)
+
+    Returns:
+        注册的 Provider 类/实例 (普通模式) 或 装饰器闭包 (装饰器模式)
     """
-    ProviderManager.register_provider(source=source, provider=provider)
+    return ProviderManager.register_provider(source=source, provider=provider)
 
 
 

@@ -1,4 +1,4 @@
-from typing import Dict, Union, Type
+from typing import Dict, Union, Type, Optional, Callable, Any
 from cq.data.provider.base import BaseProvider
 from cq.data.provider.baostock_provider import BaostockProvider
 from cq.data.provider.eastmoney_provider import EastMoneyProvider
@@ -21,19 +21,36 @@ class ProviderManager:
         return cls._instance
 
     @classmethod
-    def register_provider(cls, source: str, provider: Union[BaseProvider, Type[BaseProvider]]):
+    def register_provider(
+        cls, 
+        source: str, 
+        provider: Optional[Union[BaseProvider, Type[BaseProvider]]] = None
+    ) -> Union[Any, Callable]:
         """
-        注册自定义数据源驱动
+        注册自定义数据源驱动 (支持普通调用与类装饰器两种模式)
         
         Args:
             source: 数据源标识符 (如 'my_source' 或 table_id 末段)
-            provider: BaseProvider 实例或子类
+            provider: BaseProvider 实例或子类 (若为 None 则返回类装饰器)
+
+        Returns:
+            注册的 Provider (普通调用模式) 或 装饰器闭包函数 (装饰器模式)
         """
         if not source or not isinstance(source, str):
             raise ValueError("source must be a non-empty string.")
+
+        if provider is None:
+            def decorator(provider_cls: Union[BaseProvider, Type[BaseProvider]]):
+                cls._custom_providers[source] = provider_cls
+                if source in cls._providers:
+                    del cls._providers[source]
+                return provider_cls
+            return decorator
+
         cls._custom_providers[source] = provider
         if source in cls._providers:
             del cls._providers[source]
+        return provider
 
     def get_provider(self, table_id: str, **kwargs) -> BaseProvider:
         """

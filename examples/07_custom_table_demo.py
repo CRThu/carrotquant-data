@@ -11,8 +11,9 @@ import cq.data
 from cq.data.provider.base import BaseProvider
 
 
+@cq.data.register_provider("my_binance")
 class MyCryptoProvider(BaseProvider):
-    """自定义加密货币数据源示例驱动"""
+    """自定义加密货币数据源示例驱动 (使用类装饰器自动注册)"""
     def fetch(self, table_id: str, symbol: str, start_time: int = None, end_time: int = None) -> pl.DataFrame:
         return pl.DataFrame({
             "symbol": [symbol, symbol],
@@ -86,8 +87,7 @@ def main():
     print("[读取结果 Preview]:")
     print(df_read)
 
-    print("\n=== 5. 注册并调度自定义数据源 Provider ===")
-    cq.data.register_provider("my_binance", MyCryptoProvider)
+    print("\n=== 5. 调度通过类装饰器注册的自定义 Provider ===")
     cq.data.sync(
         table_ids="crypto.kline.1d.my_binance",
         formats="parquet",
