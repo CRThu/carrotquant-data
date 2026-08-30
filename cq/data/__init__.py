@@ -20,6 +20,8 @@ CarrotQuant.Data (cqdata)
 
 from cq.data.entrypoints import (
     read,
+    write,
+    register_provider,
     list_tables,
     list_formats,
     list_symbols,
@@ -39,6 +41,8 @@ __version__ = "1.4.0"
 
 __all__ = [
     "read",
+    "write",
+    "register_provider",
     "list_tables",
     "list_formats",
     "list_symbols",
@@ -54,3 +58,4 @@ __all__ = [
     "settings",
     "__version__"
 ]
+

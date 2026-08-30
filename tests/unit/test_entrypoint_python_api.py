@@ -35,10 +35,27 @@ def test_read_unified_polars():
         assert res_event.height == 1
 
 
-def test_read_unknown_table_raises_error():
-    """测试当 table_id 无法识别或未注册时直接抛出 ValueError 报错，绝不降级猜测"""
-    with pytest.raises(ValueError, match="Unsupported"):
-        python_api.read("unknown_table_id")
+def test_read_invalid_table_id_raises_error():
+    """测试当 table_id 为空或非法类型时直接抛出 ValueError 报错"""
+    with pytest.raises(ValueError, match="non-empty string"):
+        python_api.read("")
+
+    with pytest.raises(ValueError, match="non-empty string"):
+        python_api.read(None)
+
+
+def test_write_and_register_provider_delegation():
+    """测试 write 和 register_provider 快捷函数正确委托"""
+    mock_df = pl.DataFrame({"symbol": ["test"], "timestamp": [1000], "val": [1]})
+    with patch("cq.data.service.data_writer.DataWriter.write", return_value={"status": "success"}) as mock_write:
+        res = python_api.write("custom_table", mock_df)
+        assert res["status"] == "success"
+        assert mock_write.called
+
+    with patch("cq.data.provider.provider_manager.ProviderManager.register_provider") as mock_reg:
+        python_api.register_provider("custom_src", MagicMock())
+        assert mock_reg.called
+
 
 
 def test_list_and_get_metadata_functions():

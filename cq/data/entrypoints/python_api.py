@@ -14,6 +14,9 @@ from cq.data.service import metadata_reader as mr
 from cq.data.service import sync_manager as sm
 from cq.data.config import settings
 from cq.data.service.metadata_manager import MetadataManager
+from cq.data.service.data_writer import DataWriter
+from cq.data.provider.provider_manager import ProviderManager
+
 
 
 def read(
@@ -25,10 +28,10 @@ def read(
     format: str = "auto"
 ) -> pl.DataFrame:
     """
-    统一数据切片读取入口 (按 table_id 严格路由，不支持或未知的 table_id 直接抛出 ValueError 报错)
+    统一数据切片读取入口 (自动按 table_id 智能路由，支持内置及自定义数据表)
 
     Args:
-        table_id: 数据集 ID (例如 'ashare.kline.1d.raw.baostock' 或 'ashare.dragon_tiger.eastmoney')
+        table_id: 数据集 ID (例如 'ashare.kline.1d.raw.baostock' 或 'custom_table')
         symbols: 证券代码或代码列表
         start_date: 起始日期 ('YYYY-MM-DD')
         end_date: 结束日期 ('YYYY-MM-DD')
@@ -38,9 +41,12 @@ def read(
     Returns:
         pl.DataFrame
     """
-    from cq.data.provider.provider_manager import ProviderManager
-    provider = ProviderManager().get_provider(table_id)
-    category = provider.get_table_category(table_id)
+    if not table_id or not isinstance(table_id, str):
+        raise ValueError("table_id must be a non-empty string.")
+
+    reader = dr.DataReader()
+    actual_fmt = reader._determine_format(table_id, format)
+    category = reader._get_table_category(table_id, actual_fmt)
 
     if category == "event":
         return dr.read_events(
@@ -60,6 +66,56 @@ def read(
             columns=columns,
             format=format
         )
+
+
+def write(
+    table_id: str,
+    df: pl.DataFrame,
+    category: str = "timeseries",
+    formats: Union[List[str], str] = "parquet",
+    mode: str = "append",
+    sort_keys: Optional[List[str]] = None,
+    data_dir: Optional[Union[str, Path]] = None
+) -> Dict[str, Any]:
+    """
+    统一数据写入与导入入口。
+    将外部 DataFrame 写入本地物理存储 (Parquet / CSV) 并自动生成/更新 metadata.json。
+
+    Args:
+        table_id: 数据表 ID (如 'my_factor' 或 'crypto.kline.1d.binance')
+        df: 要写入的 Polars DataFrame
+        category: 数据集类别 ('timeseries' 或 'event')，默认为 'timeseries'
+        formats: 存储格式 ('parquet', 'csv' 或 ['parquet', 'csv'])
+        mode: 写入模式 ('append' 或 'overwrite')
+        sort_keys: 事件表排序字段列表
+        data_dir: 自定义存储根目录 (可选)
+
+
+    Returns:
+        Dict[str, Any]: 包含 table_id, category, formats, rows_written 等信息的字典
+    """
+    writer = DataWriter(data_dir=data_dir)
+    return writer.write(
+        table_id=table_id,
+        df=df,
+        category=category,
+        formats=formats,
+        mode=mode,
+        sort_keys=sort_keys
+    )
+
+
+def register_provider(source: str, provider: Any):
+    """
+    注册自定义数据源 Provider 驱动。
+
+    Args:
+        source: 数据源标识 (table_id 末段)
+        provider: Provider 类或实例 (继承 BaseProvider)
+    """
+    ProviderManager.register_provider(source=source, provider=provider)
+
+
 
 
 def list_tables(format: str = "auto") -> List[Dict[str, str]]:
@@ -155,5 +211,5 @@ def configure(config_path: Union[str, Path]):
         import cq.data
         cq.data.configure("./config.yaml")
     """
-    from cq.data.config import settings
     return settings.configure(config_path=config_path)
+

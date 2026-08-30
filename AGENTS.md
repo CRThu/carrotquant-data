@@ -146,18 +146,22 @@ SyncManager.sync()
 ## 4. 核心模块与类职责
 
 ### 4.1 接入层与配置 (Gateway & Config)
-- **`config/settings.py`**: 全局 `Settings` 配置管理，支持通过 `cq.data.configure()` 加载 YAML 配置，或优先使用环境变量 `CQDATA_DATA_DIR` 和 `CQDATA_CONFIG_PATH`。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)。
+- **`config/settings.py`**: 全局 `Settings` 配置管理，支持自动加载本地 `.env` 环境变量、通过 `cq.data.configure()` 加载 YAML 配置，或使用环境变量 `CQDATA_DATA_DIR` 和 `CQDATA_CONFIG_PATH`。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)，`.env` 模板见 [.env.sample](file:///d:/Quant/carrotquant-data/.env.sample)。
 - **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aindex.kline` 等）与 `DefaultConfig` 三层链式继承解析器（支持 `source`, `format`），默认 `raw` 极速零开销直读原始行情，显式 `adj="adj"` 时调用 `DataAdjuster` 动态后复权折算。
-- **`python_api.py`**: 提供 SDK 高阶 API (`read`, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 为单事实来源直接高效路由。
-- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端。
-- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `GET /api/v1/tables` 探查与 `GET /api/v1/query` 统一切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
+- **`python_api.py`**: 提供 SDK 高阶 API (`read`, `write`, `register_provider`, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 与动态 Provider 路由为基础，原生支持内置表与自定义外部表。
+- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
+- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/tables` 探查与 `GET /api/v1/query` 统一切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
+
 
 ### 4.2 业务服务层 (Service)
 - **`SyncManager`**: 数据同步总调度器，贯穿 Provider 拉取、批处理、Storage 写入与元数据盖章。
+- **`DataWriter`**: 统一外部数据写入服务，负责外部 DataFrame 标准化（默认 `timeseries` 时序契约、显式 `event` 事件表、补齐 `timestamp` 与 ISO `datetime`）、多格式持久化落盘与原子化元数据生成。
+
 - **`DataReader` / `MetadataReader`**: 提供多年份切片读取、按列投影选择与元数据探查。
 - **`DataAdjuster`**: 动态后复权计算引擎，基于 Polars 向量化实现 `[symbol, date]` 跨频与跨年份 Asof Join，具备历史截断前向填充、停牌保护与次新股 1.0 保底等边界防御。
 - **`TaskPlanner`**: 根据各格式的水位线（取保守交集）规划前向补全与后向拓展的任务区间（首次无水位且未指定 start_date 时默认 fallback 至 2020-01-01）。
 - **`MetadataManager`**: 负责 `metadata.json` 的原子化读写（`.tmp` -> `os.replace` -> `fsync`）。
+
 
 ### 4.3 数据驱动层 (Provider)
 - **`BaseProvider` (ABC)**: 驱动抽象基类，规范 `fetch`, `get_all_symbols`, `get_supported_tables`, `get_table_category`, `get_sort_keys` 接口。

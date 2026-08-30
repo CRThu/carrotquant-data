@@ -200,13 +200,26 @@ df = cq.data.read(
 )
 print(df)
 
-# 4. 统一切片读取板块/龙虎榜事件数据
+# 4. 统一切片读取板块/龙虎榜事件数据或自定义表
 events_df = cq.data.read(
     table_id="ashare.concept.eastmoney",
     symbols=["sh.600000"]
 )
 
-# 5. 代码中触发全自动数据同步
+# 5. 写入与导入外部自定义数据 (支持 Parquet / CSV，自动生成/更新元数据)
+import polars as pl
+df_custom = pl.DataFrame({
+    "symbol": ["BTC.USDT", "ETH.USDT"],
+    "date": ["2024-01-01", "2024-01-01"],
+    "close": [42500.0, 2280.0]
+})
+cq.data.write(
+    table_id="crypto.kline.1d.binance",
+    df=df_custom,
+    formats=["parquet", "csv"]
+)
+
+# 6. 代码中触发全自动数据同步
 cq.data.sync(table_ids=["ashare.kline.1d.raw.baostock"], formats=["parquet"])
 ```
 
@@ -226,7 +239,11 @@ cqdata sync --tables "ashare.kline.1d.raw.baostock,ashare.adj_factor.baostock"
 
 # 指定日期区间与保存格式进行全量强制更新
 cqdata sync -t ashare.kline.1d.raw.baostock -f parquet -s 2023-01-01 -e 2023-12-31 --force
+
+# 导入外部 CSV 或 Parquet 文件到自定义数据表
+cqdata import my_factors.csv --table custom.factors.momentum --formats parquet,csv
 ```
+
 
 #### 💡 通达信 (TDX) 最佳同步实践说明
 

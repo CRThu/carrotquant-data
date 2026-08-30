@@ -4,6 +4,7 @@ import { useMarketData } from '../hooks/useMarketData';
 import { DataTable } from '../components/DataTable';
 import { Table, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { SearchInput } from '../components/SearchInput';
+import { apiClient } from '../services/apiClient';
 
 interface DataMatrixViewProps {
   currentTableId: string;
@@ -24,6 +25,7 @@ export const DataMatrixView: React.FC<DataMatrixViewProps> = ({
 
   const [activeTableId, setActiveTableId] = useState<string>(currentTableId);
   const [symbolInput, setSymbolInput] = useState<string>(selectedSymbol);
+  const [dynamicTables, setDynamicTables] = useState<string[]>([]);
   const [page, setPage] = useState<number>(1);
   const pageSize = 50; // 矩阵切片单页 50 行，纯前端 0ms 无缝切页
 
@@ -36,6 +38,17 @@ export const DataMatrixView: React.FC<DataMatrixViewProps> = ({
     setSymbolInput(selectedSymbol);
     setPage(1);
   }, [selectedSymbol]);
+
+  useEffect(() => {
+    let isMounted = true;
+    apiClient.listTables().then((res) => {
+      if (isMounted && res && res.tables) {
+        const tableIds = res.tables.map((t: any) => (typeof t === 'string' ? t : t.table_id));
+        setDynamicTables(tableIds);
+      }
+    }).catch(() => {});
+    return () => { isMounted = false; };
+  }, []);
 
   const handleTableSelect = (tid: string) => {
     setActiveTableId(tid);
@@ -72,12 +85,29 @@ export const DataMatrixView: React.FC<DataMatrixViewProps> = ({
     };
   }, [matrixRaw, page, activeTableId, pageSize]);
 
-  // 快捷可搜索的数据源列表
-  const tableSearchItems = DATA_SOURCE_OPTIONS.map((opt) => ({
-    code: opt.table_id,
-    name: opt.name,
-    subText: opt.source.toUpperCase(),
-  }));
+  // 快捷可搜索的数据源列表 (预定义表 + 动态磁盘发现的自定义表)
+  const tableSearchItems = useMemo(() => {
+    const knownSet = new Set(DATA_SOURCE_OPTIONS.map((opt) => opt.table_id));
+    const items = DATA_SOURCE_OPTIONS.map((opt) => ({
+      code: opt.table_id,
+      name: opt.name,
+      subText: opt.source.toUpperCase(),
+    }));
+
+    // 追加未在预定义中的外部自定义表
+    dynamicTables.forEach((tid) => {
+      if (!knownSet.has(tid)) {
+        items.push({
+          code: tid,
+          name: `自定义表 (${tid})`,
+          subText: 'CUSTOM',
+        });
+      }
+    });
+
+    return items;
+  }, [dynamicTables]);
+
 
   return (
     <div className="h-full flex flex-col space-y-3 overflow-hidden animate-in fade-in duration-300">

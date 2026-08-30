@@ -14,6 +14,7 @@
 | [`04_read_events.py`](04_read_events.py) | 事件/静态数据切片读取 | `cq.data.read` (概念板块/龙虎榜等) |
 | [`05_export_pandas.py`](05_export_pandas.py) | Pandas DataFrame 转码 | `cq.data.read().to_pandas()` |
 | [`06_metadata_inspection.py`](06_metadata_inspection.py) | 元数据与存储盘点示例 | `cq.data.list_tables`, `get_time_range`, `get_schema` 等 |
+| [`07_custom_table_demo.py`](07_custom_table_demo.py) | 自定义数据表读写与 Provider 扩展 | `cq.data.write`, `cq.data.read`, `cq.data.register_provider` |
 
 ---
 
@@ -28,5 +29,7 @@ uv run python examples/03_read_series.py
 uv run python examples/04_read_events.py
 uv run python examples/05_export_pandas.py
 uv run python examples/06_metadata_inspection.py
+uv run python examples/07_custom_table_demo.py
 ```
+
 

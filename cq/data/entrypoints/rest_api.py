@@ -24,6 +24,18 @@ from pydantic import BaseModel
 from loguru import logger
 from cq.data.config import settings
 from cq.data.utils.logger_utils import log_broadcaster, setup_logger
+from cq.data import __version__
+from cq.data.entrypoints.python_api import (
+    read,
+    write,
+    list_tables,
+    list_formats,
+    list_symbols,
+    get_time_range,
+    get_schema,
+    get_row_count,
+    sync
+)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -44,26 +56,6 @@ class SPAStaticFiles(StaticFiles):
                 return await super().get_response("index.html", scope)
             raise ex
 
-
-
-
-
-
-
-
-
-from cq.data.entrypoints.python_api import (
-    read,
-    list_tables,
-    list_formats,
-    list_symbols,
-    get_time_range,
-    get_schema,
-    get_row_count,
-    sync
-)
-
-from cq.data import __version__
 
 # 初始化全系统 Loguru 日志，挂载 LogBroadcaster.sink 供 SSE 日志流使用
 setup_logger()
@@ -126,6 +118,17 @@ class SyncRequest(BaseModel):
     batch_size: int = 100
     symbol_limit: Optional[int] = None
     provider_kwargs: Optional[Dict[str, Any]] = None
+
+
+class TableWriteRequest(BaseModel):
+    table_id: str
+    data: List[Dict[str, Any]]
+    category: str = "timeseries"
+    formats: List[str] = ["parquet"]
+    mode: str = "append"
+    sort_keys: Optional[List[str]] = None
+
+
 
 
 def parse_comma_param(val: Optional[str]) -> Optional[List[str]]:
@@ -517,6 +520,36 @@ def api_query(
         }
     except Exception as e:
         handle_endpoint_exception(e, "GET query")
+
+
+@app.post("/api/v1/write")
+def api_write_data(request: TableWriteRequest):
+
+    """
+    统一数据写入/导入 API 端点。
+    支持将外部 JSON 结构化数据写入本地指定的数据表，并自动生成/更新 metadata.json。
+    """
+    try:
+        if not request.data:
+            raise HTTPException(status_code=400, detail="Data payload cannot be empty.")
+
+        df = pl.DataFrame(request.data)
+        result = write(
+            table_id=request.table_id,
+            df=df,
+            category=request.category,
+            formats=request.formats,
+            mode=request.mode,
+            sort_keys=request.sort_keys
+        )
+        return {
+            "status": "success",
+            "table_id": request.table_id,
+            "result": result
+        }
+    except Exception as e:
+        handle_endpoint_exception(e, f"POST write for {request.table_id}")
+
 
 
 # ==================== 同步与控制 Endpoints ====================

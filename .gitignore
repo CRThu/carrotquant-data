@@ -10,7 +10,10 @@ test_*data*/
 /logs/
 /tdx_data/
 
+.env
+.env.local
 config/config.yaml
+
 
 # Testing & Coverage
 .coverage

@@ -49,12 +49,15 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
 | | `/tables/{table_id}/time_range` | `GET` | 获取某数据表覆盖的全局时间起止跨度 |
 | | `/tables/{table_id}/schema` | `GET` | 获取某数据表的字段列名与 Polars/数据类型映射字典 |
 | | `/tables/{table_id}/row_count` | `GET` | 获取某数据表在物理存储中的记录总条数 |
+| **数据写入与导入** | `/write` | `POST` | 写入/导入自定义结构化数据，自动生成与原子化更新 `metadata.json` |
 | **数据切片查询** | `/query` | `GET` | **【HTTP GET】** 统一切片查询，按 `table_id` 自动智能路由，支持物理分页与 2D List 导出 |
+
 | **同步任务控制** | `/sync` | `POST` | 触发后台数据全自动增量/全量同步任务 |
 | | `/tasks` | `GET` | 获取当前正在后台运行的同步任务列表 |
 | | `/sync/status` | `GET` | 获取全局同步任务精准进度、百分比与处理 Symbol 字典 |
 | | `/logs/stream` | `GET` | **【SSE】** Server-Sent Events 全局 Loguru 系统与数据引擎日志实时推送流 |
 | **文件系统探查** | `/filesystem/list` | `GET` | 通用本地文件/目录列表探查 API（为 Web 端文件浏览器 Modal 提供支持） |
+
 
 > [!TIP]
 > **数据字典与字段速查**：查询接口 (`GET /api/v1/query`) 中 `columns` 过滤支持的具体字段清单、数据类型定义及各数据源（TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
@@ -214,7 +217,65 @@ curl -X GET "http://127.0.0.1:8000/api/v1/tables/ashare.kline.1d.raw.baostock/ro
 
 ---
 
-### 3.8 统一切片数据查询 (`GET /api/v1/query`)
+### 3.8 写入/导入自定义数据 (`POST /api/v1/write`)
+
+接收结构化 JSON 数据并写入指定的本地 Parquet 或 CSV 数据表中，自动完成字段标准化与 `metadata.json` 原子化盖章。
+
+
+#### 请求 Body 参数 (JSON Payload)
+| 字段名 | 类型 | 必填 | 默认值 | 说明 |
+| :--- | :--- | :---: | :--- | :--- |
+| `table_id` | String | **是** | - | 目标数据表 ID (如 `custom.factors.momentum`) |
+| `data` | List[Dict] | **是** | - | 要写入的行数据对象数组 |
+| `category` | String | 否 | `"timeseries"` | 数据集类别 (`timeseries` 或 `event`)，默认为 `"timeseries"` |
+| `formats` | List[String] | 否 | `["parquet"]` | 目标存储格式列表 (`["parquet"]`, `["csv"]` 或 `["parquet", "csv"]`) |
+
+| `mode` | String | 否 | `"append"` | 写入模式 (`append` 增量合并去重，`overwrite` 全量覆盖) |
+| `sort_keys` | List[String] | 否 | `None` | 事件表自定义排序列 |
+
+#### 请求 JSON 示例
+```json
+{
+  "table_id": "custom.factors.alpha_mom",
+  "category": "timeseries",
+  "formats": ["parquet", "csv"],
+  "mode": "append",
+  "data": [
+    {
+      "symbol": "sh.600000",
+      "timestamp": 1704067200000,
+      "momentum": 1.25,
+      "volatility": 0.18
+    },
+    {
+      "symbol": "sz.000001",
+      "timestamp": 1704067200000,
+      "momentum": 0.95,
+      "volatility": 0.22
+    }
+  ]
+}
+```
+
+#### 响应 JSON 示例
+```json
+{
+  "status": "success",
+  "table_id": "custom.factors.alpha_mom",
+  "result": {
+    "table_id": "custom.factors.alpha_mom",
+    "category": "timeseries",
+    "formats": ["parquet", "csv"],
+    "rows_written": 2,
+    "status": "success"
+  }
+}
+```
+
+---
+
+### 3.9 统一切片数据查询 (`GET /api/v1/query`)
+
 
 后端接收到请求后，会自动判断 `table_id` 的类别（时序数据还是事件数据）并智能路由，同时支持物理分页与字段选挑（Columns Projection）。
 

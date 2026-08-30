@@ -11,8 +11,11 @@ import uvicorn
 from typing import List, Optional
 from pathlib import Path
 
+import polars as pl
+from cq.data.config import settings
 from cq.data.entrypoints.python_api import (
     sync as api_sync,
+    write,
     list_tables,
     list_symbols,
     get_time_range,
@@ -20,6 +23,7 @@ from cq.data.entrypoints.python_api import (
     get_row_count
 )
 from scripts.download_tdx import download_and_extract as tdx_download_and_extract
+
 
 app = typer.Typer(
     help="CarrotQuant.Data (cqdata) - 本地金融数据同步与管理工具 CLI",
@@ -181,5 +185,47 @@ def tdx_download_cmd(
     tdx_download_and_extract(vipdoc_path)
 
 
+@app.command(name="import")
+def import_cmd(
+    file: str = typer.Argument(..., help="要导入的外部数据文件路径 (.csv 或 .parquet)"),
+    table_id: str = typer.Option(..., "--table", "-t", help="目标数据表 ID (如 my_custom_table)"),
+    category: str = typer.Option("timeseries", "--category", "-c", help="数据表类别 ('timeseries' 或 'event')，默认为 'timeseries'"),
+    formats: str = typer.Option("parquet", "--formats", "-f", help="目标存储格式，逗号分隔 (如 parquet,csv)"),
+    mode: str = typer.Option("append", "--mode", "-m", help="写入模式 (append 增量合并，overwrite 覆盖)"),
+    data_dir: Optional[str] = typer.Option(None, "--data-dir", help="指定数据存储根目录")
+):
+    """
+    将外部 CSV 或 Parquet 文件导入并持久化到本地数据表中
+    """
+    if data_dir:
+        settings.data_dir = data_dir
+
+    file_path = Path(file)
+    if not file_path.exists():
+        typer.echo(f"[!] 错误: 文件 '{file}' 不存在。", err=True)
+        raise typer.Exit(code=1)
+
+
+    typer.echo(f"[*] 正在读取外部文件: {file_path}")
+    if file_path.suffix.lower() == ".csv":
+        df = pl.read_csv(file_path)
+    elif file_path.suffix.lower() in (".parquet", ".pq"):
+        df = pl.read_parquet(file_path)
+    else:
+        typer.echo(f"[!] 错误: 不支持的文件格式 '{file_path.suffix}'，仅支持 .csv 和 .parquet", err=True)
+        raise typer.Exit(code=1)
+
+    format_list = [fmt.strip() for fmt in formats.split(",") if fmt.strip()]
+    result = write(
+        table_id=table_id,
+        df=df,
+        category=category,
+        formats=format_list,
+        mode=mode
+    )
+    typer.echo(f"[+] 导入成功! 已写入 {result.get('rows_written', 0):,} 行记录至表 '{table_id}' ({format_list})")
+
+
 if __name__ == "__main__":
     app()
+

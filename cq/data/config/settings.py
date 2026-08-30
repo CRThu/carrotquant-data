@@ -12,6 +12,9 @@ import os
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
 import yaml
+from dotenv import load_dotenv
+from cq.data.utils.logger_utils import setup_logger
+
 
 
 class Settings:
@@ -32,10 +35,18 @@ class Settings:
     def _load_initial_config(self) -> None:
         """
         按优先级规则初始化加载配置：
-        1. 内置默认值
-        2. 环境变量 CQDATA_CONFIG_PATH 显式指定配置文件
+        1. 自动从当前目录下的 .env 文件加载环境变量 (override=True 确保本地 .env 显式定义即生效)
+        2. 环境变量 CQDATA_CONFIG_PATH 显式指定 YAML 配置文件
         3. 环境变量 CQDATA_DATA_DIR 显式覆盖 data_dir
+        4. 环境变量 CQDATA_LOG_DIR / CQDATA_LOG_LEVEL 显式覆盖日志配置
         """
+        # 0. 自动加载当前目录下的 .env 文件
+        env_file = Path(".env")
+        if env_file.is_file():
+            load_dotenv(dotenv_path=env_file, override=True)
+
+
+
         # 1. 环境变量 CQDATA_CONFIG_PATH 显式指定 YAML 配置文件
         config_path_env = os.getenv("CQDATA_CONFIG_PATH")
         if config_path_env:
@@ -46,6 +57,15 @@ class Settings:
         # 2. 环境变量 CQDATA_DATA_DIR 显式覆盖 data_dir
         if os.getenv("CQDATA_DATA_DIR"):
             self.data_dir = os.getenv("CQDATA_DATA_DIR")
+
+        # 3. 环境变量 CQDATA_LOG_DIR 显式覆盖 log_dir
+        if os.getenv("CQDATA_LOG_DIR"):
+            self.log_dir = os.getenv("CQDATA_LOG_DIR")
+
+        # 4. 环境变量 CQDATA_LOG_LEVEL 显式覆盖 log_level
+        if os.getenv("CQDATA_LOG_LEVEL"):
+            self.log_level = os.getenv("CQDATA_LOG_LEVEL").upper()
+
 
     def load_from_file(self, config_path: Union[str, Path]) -> "Settings":
         """
@@ -88,10 +108,10 @@ class Settings:
     def _refresh_logger(self) -> None:
         """配置变更后安全刷新 loggerHandler"""
         try:
-            from cq.data.utils.logger_utils import setup_logger
             setup_logger(log_level=self.log_level, log_dir=self.log_dir)
         except Exception:
             pass
+
 
     def _update_accessor_defaults(self) -> None:
         """更新全局 accessor defaults 链"""

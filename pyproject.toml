@@ -15,6 +15,7 @@ dependencies = [
     "loguru>=0.7.3",
     "polars>=1.39.0",
     "pydantic>=2.12.5",
+    "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "tdxpy>=0.2.7",
     "tenacity>=9.1.4",

@@ -138,6 +138,20 @@ describe('apiClient full execution coverage test suite', () => {
     expect(res.active_tasks).toEqual([]);
   });
 
+  it('should execute writeTable correctly', async () => {
+    const spy = vi.spyOn(axios.Axios.prototype, 'request').mockResolvedValue({
+      data: { status: 'success', table_id: 'custom_table', result: { rows_written: 10 } },
+    });
+
+    const res = await apiClient.writeTable({
+      table_id: 'custom_table',
+      data: [{ symbol: 'test.001', close: 10.0 }],
+    });
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe('success');
+    expect(res.table_id).toBe('custom_table');
+  });
+
   it('should create Log EventSource using /api/v1/logs/stream', () => {
     const mockEventSource = vi.fn();
     vi.stubGlobal('EventSource', mockEventSource);
@@ -146,4 +160,5 @@ describe('apiClient full execution coverage test suite', () => {
     expect(mockEventSource).toHaveBeenCalledWith('http://localhost:8888/api/v1/logs/stream');
   });
 });
+
 

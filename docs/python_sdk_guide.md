@@ -33,7 +33,9 @@ import cq.data
 | | `cq.data.ashare.dragon_tiger.get()` | 快捷读取龙虎榜统计数据 |
 | | `cq.data.ashare.inst_trade.get()` | 快捷读取机构买卖每日统计数据 |
 | **链式默认配置** | `cq.data.default` / `cq.data.ashare.default` | 三层链式默认值对象 (表级 > 市场级 > 全局) |
-| **数据切片与探查** | `cq.data.read()` | 统一切片读取金融数据（自动按 `table_id` 智能路由） |
+| **数据切片与探查** | `cq.data.read()` | 统一切片读取金融数据（自动按 `table_id` 智能路由，支持自定义表） |
+| | `cq.data.write()` | 统一写入/导入数据至本地（支持时序/事件表，自动生成/更新元数据） |
+| | `cq.data.register_provider()` | 注册自定义数据源 Provider 驱动扩展 |
 | | `cq.data.list_tables()` | 列出本地所有已存在的数据表及其 `category` 分类 |
 | | `cq.data.list_formats()` | 查询某数据表在本地已有的存储格式 (`parquet`, `csv`) |
 | | `cq.data.list_symbols()` | 查询某数据表在本地已存储的代码列表 |
@@ -43,6 +45,7 @@ import cq.data
 | **同步与全局配置** | `cq.data.sync()` | 触发全自动增量/全量同步引擎 |
 | | `cq.data.configure()` | 显式从 YAML 配置文件装载全局配置 |
 | | `cq.data.settings` | 全局 Settings 实例 (可直接访问与修改属性) |
+
 
 > [!TIP]
 > **数据字典与字段速查**：各数据表支持的具体字段清单、数据类型定义及各数据源（TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
@@ -192,13 +195,62 @@ df = cq.data.read(
 
 ---
 
-#### 3.2.2 `cq.data.list_tables()`
+#### 3.2.2 `cq.data.write()`
+
+统一数据写入与外部数据导入接口。将外部 Polars DataFrame 规范化写入本地物理存储（Parquet / CSV）并自动生成/原子化更新 `metadata.json`。
+
+```python
+result = cq.data.write(
+    table_id="custom.factor.alpha101",
+    df=df,
+    category="timeseries",
+    formats=["parquet", "csv"],
+    mode="append",
+    sort_keys=None
+)
+```
+
+- **参数说明 (Args)**:
+  - `table_id` (`str`, 必填): 数据表 ID (如 `"my_factor"` 或 `"crypto.kline.1d.binance"`)。
+  - `df` (`pl.DataFrame`, 必填): 要写入的 Polars DataFrame。
+  - `category` (`str`, 可选): 数据集类别 (`"timeseries"` 或 `"event"`)，默认为 `"timeseries"`。写入纯静态平铺表时需显式传入 `"event"`。
+  - `formats` (`str` 或 `List[str]`, 可选): 存储格式，默认 `"parquet"` (可选 `"parquet"`, `"csv"`, 或 `["parquet", "csv"]`)。
+  - `mode` (`str`, 可选): 写入模式，默认 `"append"` (增量合并去重)。支持 `"append"` 与 `"overwrite"` (覆盖)。
+  - `sort_keys` (`List[str]`, 可选): 事件表平铺模式下的自定义排序列。
+
+- **返回值 (Returns)**:
+  - `Dict[str, Any]`: 包含 `table_id`, `category`, `formats`, `rows_written`, `status` 等信息的执行结果字典。
+
+---
+
+#### 3.2.3 `cq.data.register_provider()`
+
+动态注册外部自定义数据源 Provider 驱动，将其无缝接入 `cq.data.sync()` 调度流水线。
+
+```python
+from cq.data.provider.base import BaseProvider
+
+class MyCustomProvider(BaseProvider):
+    # 实现 fetch, get_all_symbols, get_supported_tables, get_table_category, get_sort_keys
+    ...
+
+cq.data.register_provider("my_source", MyCustomProvider)
+```
+
+- **参数说明 (Args)**:
+  - `source` (`str`, 必填): 数据源标识符（对应 table_id 的末段标识）。
+  - `provider` (`BaseProvider` 或 `Type[BaseProvider]`, 必填): 继承自 `BaseProvider` 的驱动类或实例。
+
+---
+
+#### 3.2.4 `cq.data.list_tables()`
 
 列出本地物理存储中已存在的全量数据表及其分类信息。
 
 ```python
 tables = cq.data.list_tables(format="auto")
 ```
+
 
 - **参数说明 (Args)**:
   - `format` (`str`, 可选): 探查特定格式 (`"auto"`, `"parquet"`, `"csv"`)。
@@ -365,7 +417,16 @@ cq.data.settings.log_level = "DEBUG"
   - `log_level` (`str`): 控制台与文件日志输出级别 (默认 `"INFO"`)。
   - `defaults` (`dict`): 加载的 YAML 默认配置字典。
 
+- **本地 `.env` 自动加载支持**:
+  系统在初始化时会自动加载当前目录下的 `.env` 文件（模板见 [`.env.sample`](file:///d:/Quant/carrotquant-data/.env.sample)）：
+  ```bash
+  # .env
+  CQDATA_DATA_DIR=D:/Quant/my_data
+  CQDATA_LOG_LEVEL=DEBUG
+  ```
+
 ---
+
 
 ## 4. 常见场景使用示例
 

@@ -178,6 +178,22 @@ export const apiClient = {
   },
 
   /**
+   * 写入/导入自定义数据表
+   */
+  async writeTable(payload: {
+    table_id: string;
+    data: Record<string, any>[];
+    category?: string;
+    formats?: string[];
+    mode?: string;
+    sort_keys?: string[];
+  }) {
+    const res = await api.post('/write', payload);
+    return res.data;
+  },
+
+
+  /**
    * 创建 SSE (Server-Sent Events) 日志流 EventSource 连接
    */
   createLogEventSource(): EventSource {
@@ -185,4 +201,5 @@ export const apiClient = {
     return new EventSource(sseUrl);
   },
 };
+
 

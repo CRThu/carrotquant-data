@@ -6,6 +6,8 @@ cqdata/entrypoints/__init__.py
 
 from cq.data.entrypoints.python_api import (
     read,
+    write,
+    register_provider,
     list_tables,
     list_formats,
     list_symbols,
@@ -24,6 +26,8 @@ from cq.data.entrypoints.accessors import (
 
 __all__ = [
     "read",
+    "write",
+    "register_provider",
     "list_tables",
     "list_formats",
     "list_symbols",
@@ -37,3 +41,4 @@ __all__ = [
     "ashare",
     "aindex"
 ]
+
