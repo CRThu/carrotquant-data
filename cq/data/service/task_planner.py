@@ -47,11 +47,11 @@ class TaskPlanner:
 
         # 2. 默认日期推导
         if not start_date:
-            if loc_end and loc_end > 0:
-                # 如果有本地水位，从本地结束时间开始（增量）
+            if not force_refresh and loc_end and loc_end > 0:
+                # 如果有本地水位且非强制刷新，从本地结束时间开始（增量）
                 req_start = loc_end
             else:
-                # 首次同步且未指定 start_date 时，默认全量起点为 1970-01-01 (ts=0)
+                # 强制刷新或首次同步且未指定 start_date 时，默认全量起点为 1970-01-01 (ts=0)
                 req_start = parse_date_to_ts("1970-01-01")
         else:
             req_start = parse_date_to_ts(start_date)

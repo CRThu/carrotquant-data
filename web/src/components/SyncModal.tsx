@@ -10,7 +10,7 @@ interface SyncModalProps {
 
 export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
   const [selectedTables, setSelectedTables] = useState<string[]>([DATA_SOURCE_OPTIONS[0].table_id]);
-  const [startDate, setStartDate] = useState<string>('2024-01-01');
+  const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [forceRefresh, setForceRefresh] = useState<boolean>(false);
   const [tdxMode, setTdxMode] = useState<'online' | 'local'>('online');
@@ -272,25 +272,33 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
           {/* 2. 起止时间范围 */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="startDateInput" className="block text-xs font-medium text-slate-300 mb-1.5">起始日期</label>
+              <label htmlFor="startDateInput" className="block text-xs font-medium text-slate-300 mb-1.5">
+                起始日期 <span className="text-[10px] text-slate-500 font-normal">(留空自动增量 / 首次全量)</span>
+              </label>
               <input
                 id="startDateInput"
                 name="startDateInput"
                 type="date"
+                min="1990-01-01"
+                max="2099-12-31"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 [color-scheme:dark]"
               />
             </div>
             <div>
-              <label htmlFor="endDateInput" className="block text-xs font-medium text-slate-300 mb-1.5">结束日期 (留空至今)</label>
+              <label htmlFor="endDateInput" className="block text-xs font-medium text-slate-300 mb-1.5">
+                结束日期 <span className="text-[10px] text-slate-500 font-normal">(留空包含今日)</span>
+              </label>
               <input
                 id="endDateInput"
                 name="endDateInput"
                 type="date"
+                min="1990-01-01"
+                max="2099-12-31"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 [color-scheme:dark]"
               />
             </div>
           </div>

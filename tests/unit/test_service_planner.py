@@ -467,3 +467,28 @@ def test_plan_same_day_incremental_refresh():
     assert task["start"] == align_to_day_start(parse_date_to_ts("2024-01-15"))
     # task_end = align_to_day_end(req_end) = 2024-01-15T23:59:59.999
     assert task["end"] == align_to_day_end(parse_date_to_ts("2024-01-15"))
+
+
+def test_plan_local_data_force_refresh_no_start_date():
+    """
+    测试本地已有数据（2020-2024）+ 用户未传 start_date + 勾选 force_refresh=True
+    验证 req_start 必须被重置为 1970-01-01 全量历史起点，而非本地结束时间
+    """
+    metadata_mgr = MagicMock()
+    metadata_mgr.load.return_value = {
+        "statistics": {
+            "start_timestamp": parse_date_to_ts("2020-01-01"),
+            "end_timestamp": parse_date_to_ts("2024-01-02"),
+        }
+    }
+
+    planner = TaskPlanner(metadata_mgr)
+
+    with patch('time.time', return_value=1704153600):  # 2024-01-02
+        tasks = planner.plan("test.table", ["csv"], ["sh.600000"], force_refresh=True)
+
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task["start"] == parse_date_to_ts("1970-01-01")
+    assert task["symbol"] == "sh.600000"
+

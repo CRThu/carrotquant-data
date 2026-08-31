@@ -158,3 +158,49 @@ class TestStockDBSyncIntegration:
             assert not df_ind.is_empty()
             assert "board_code" in df_ind.columns
             assert "symbol" in df_ind.columns
+
+    def test_stockdb_kline_1d_null_prefix_inference(self, temp_data_dir):
+        """测试日线记录前 100+ 条部分截面因子全为 None 时，类型推断与补齐不会触发 NullBuilder 异常"""
+        from datetime import date, timedelta
+        mock_records = []
+        base_date = date(2020, 1, 1)
+        # 前 120 条记录：turnover/amplitude 等为 None
+        for i in range(120):
+            d = base_date + timedelta(days=i)
+            mock_records.append({
+                "code": "501001", "date": int(d.strftime("%Y%m%d")),
+                "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
+                "volume": 1000.0, "amount": 10000.0,
+                "turnover": None, "amplitude": None, "pct_chg": None,
+                "total_mv": None, "pe_ttm": None
+            })
+        # 第 121 条记录：turnover 出现浮点数
+        d_last = base_date + timedelta(days=120)
+        mock_records.append({
+            "code": "501001", "date": int(d_last.strftime("%Y%m%d")),
+            "open": 1.05, "high": 1.15, "low": 1.0, "close": 1.1,
+            "volume": 2000.0, "amount": 22000.0,
+            "turnover": 2.36, "amplitude": 5.12, "pct_chg": 4.76,
+            "total_mv": 10000000.0, "pe_ttm": 12.5
+        })
+
+        mock_rd = MagicMock()
+        mock_rd.get.return_value = {"5": ["501001"]}
+        mock_rd.vals.return_value = mock_records
+
+        with mock_stockdb_context(mock_rd), \
+             patch("cq.data.provider.stockdb.provider.StockDBProvider.get_all_symbols", return_value=["sh.501001"]):
+            sm = SyncManager(data_dir=str(temp_data_dir))
+            sm.sync(
+                table_ids=["aetf.kline.1d.raw.stockdb"],
+                formats=["parquet"],
+                start_date="2020-01-01",
+                end_date="2020-05-01",
+            )
+
+            df = read("aetf.kline.1d.raw.stockdb", format="parquet")
+            assert len(df) == 121
+            assert "turnover_rate" in df.columns
+            assert "change_pct" in df.columns
+            assert df["turnover_rate"][-1] == pytest.approx(2.36)
+

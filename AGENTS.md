@@ -314,6 +314,7 @@ type_map = {
    - 业务合法空数据（如停牌、无龙虎榜记录）：允许返回带 Schema 的空表。
 5. **增量水位线**: 多格式同步时水位线取交集保守计算 (`start` 取 max, `end` 取 min)，保证各存储格式完整覆盖。
 6. **无损降级处理**: EV 数据在缺少 `symbol` 列时自动回退为仅按 `timestamp` 排序，严禁抛出 `ColumnNotFoundError`。
+7. **驱动层强类型构造规约**: 从原始数据构造 DataFrame 必须显式传入 `schema` 强类型字典（如 `pl.DataFrame(records, schema=raw_schema)`），严禁使用自动类型推断，防止因前缀连续 `None` 误判为 `Null` 导致后续数据追加溢出崩溃，并确保批处理批量聚合时 Schema 严格对齐。
 
 ---
 

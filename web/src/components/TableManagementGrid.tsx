@@ -37,7 +37,7 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   
   // 固化平铺的起止日期与强制刷新配置
-  const [startDate, setStartDate] = useState<string>('2020-01-01');
+  const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [forceRefresh, setForceRefresh] = useState<boolean>(false);
 
@@ -195,24 +195,31 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
         {/* 固定平铺展示的时间与刷新参数 */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-800/60 text-xs">
           <div>
-            <label htmlFor="gridStartDate" className="block text-slate-400 mb-1 font-medium">起始日期</label>
+            <label htmlFor="gridStartDate" className="block text-slate-400 mb-1 font-medium">
+              起始日期 <span className="text-[10px] text-slate-500 font-normal">(留空自动增量 / 首次全量)</span>
+            </label>
             <input
               id="gridStartDate"
               type="date"
+              min="1990-01-01"
+              max="2099-12-31"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono [color-scheme:dark]"
             />
           </div>
           <div>
-            <label htmlFor="gridEndDate" className="block text-slate-400 mb-1 font-medium">结束日期 (留空包含今日)</label>
+            <label htmlFor="gridEndDate" className="block text-slate-400 mb-1 font-medium">
+              结束日期 <span className="text-[10px] text-slate-500 font-normal">(留空包含今日)</span>
+            </label>
             <input
               id="gridEndDate"
               type="date"
+              min="1990-01-01"
+              max="2099-12-31"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-              placeholder="留空即包含今日"
+              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono [color-scheme:dark]"
             />
           </div>
           <div className="flex items-center space-x-2 pt-5">

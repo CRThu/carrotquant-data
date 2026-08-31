@@ -228,16 +228,16 @@ class StockDBProvider(BaseProvider):
         raw_records = self._rd.vals("日k", raw_code, time_query) or []
         records = [r for r in raw_records if isinstance(r, dict)]
 
-        schema_cols = {
-            "symbol": pl.String,
+        raw_schema = {
+            "date": pl.String,
             "open": pl.Float64,
             "high": pl.Float64,
             "low": pl.Float64,
             "close": pl.Float64,
             "volume": pl.Float64,
             "amount": pl.Float64,
-            "change_pct": pl.Float64,
-            "turnover_rate": pl.Float64,
+            "turnover": pl.Float64,
+            "pct_chg": pl.Float64,
             "total_mv": pl.Float64,
             "float_mv": pl.Float64,
             "total_share": pl.Float64,
@@ -249,45 +249,11 @@ class StockDBProvider(BaseProvider):
             "amplitude": pl.Float64,
         }
 
-        if not records:
-            empty_df = pl.DataFrame(schema={"date": pl.String, **schema_cols})
-            return DataCleaner.standardize(
-                empty_df, "date", time_fmt="%Y%m%d",
-                source_tz="Asia/Shanghai", display_tz="Asia/Shanghai", time_shift_hours=15
-            )
+        df = pl.DataFrame(records, schema=raw_schema)
+        df = df.rename({"turnover": "turnover_rate", "pct_chg": "change_pct"}).with_columns(
+            pl.lit(norm_symbol).cast(pl.String).alias("symbol")
+        )
 
-        df = pl.DataFrame(records)
-
-        # 1. 显式剔除 pre_close 脏列与 name 冗余列
-        cols_to_drop = [c for c in ("pre_close", "name") if c in df.columns]
-        if cols_to_drop:
-            df = df.drop(cols_to_drop)
-
-        # 2. 字段重命名对齐
-        rename_map = {
-            "code": "symbol",
-            "turnover": "turnover_rate",
-            "pct_chg": "change_pct",
-        }
-        actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
-        if actual_rename:
-            df = df.rename(actual_rename)
-
-        # 3. 补齐并规范化 symbol 列
-        df = df.with_columns(pl.lit(norm_symbol).cast(pl.String).alias("symbol"))
-
-        # 4. 类型转换
-        cast_exprs = []
-        for col_name, col_type in schema_cols.items():
-            if col_name in df.columns and col_name != "symbol":
-                cast_exprs.append(pl.col(col_name).cast(col_type, strict=False))
-        if cast_exprs:
-            df = df.with_columns(cast_exprs)
-
-        # 确保 date 列为字符串便于标准转换
-        df = df.with_columns(pl.col("date").cast(pl.String))
-
-        # 5. 标准化时间并对齐 15:00:00
         return DataCleaner.standardize(
             df, "date", time_fmt="%Y%m%d",
             source_tz="Asia/Shanghai", display_tz="Asia/Shanghai", time_shift_hours=15
@@ -311,8 +277,8 @@ class StockDBProvider(BaseProvider):
         raw_records = self._rd.vals("分钟k", raw_code, time_query) or []
         records = [r for r in raw_records if isinstance(r, dict)]
 
-        schema_cols = {
-            "symbol": pl.String,
+        raw_schema = {
+            "date": pl.String,
             "open": pl.Float64,
             "high": pl.Float64,
             "low": pl.Float64,
@@ -321,32 +287,8 @@ class StockDBProvider(BaseProvider):
             "amount": pl.Float64,
         }
 
-        if not records:
-            empty_df = pl.DataFrame(schema={"date": pl.String, **schema_cols})
-            return DataCleaner.standardize(
-                empty_df, "date", time_fmt="%Y%m%d%H%M%S",
-                source_tz="Asia/Shanghai", display_tz="Asia/Shanghai", time_shift_hours=0
-            )
-
-        df = pl.DataFrame(records)
-
-        cols_to_drop = [c for c in ("pre_close", "name") if c in df.columns]
-        if cols_to_drop:
-            df = df.drop(cols_to_drop)
-
-        if "code" in df.columns:
-            df = df.rename({"code": "symbol"})
-
+        df = pl.DataFrame(records, schema=raw_schema)
         df = df.with_columns(pl.lit(norm_symbol).cast(pl.String).alias("symbol"))
-
-        cast_exprs = []
-        for col_name, col_type in schema_cols.items():
-            if col_name in df.columns and col_name != "symbol":
-                cast_exprs.append(pl.col(col_name).cast(col_type, strict=False))
-        if cast_exprs:
-            df = df.with_columns(cast_exprs)
-
-        df = df.with_columns(pl.col("date").cast(pl.String))
 
         return DataCleaner.standardize(
             df, "date", time_fmt="%Y%m%d%H%M%S",
