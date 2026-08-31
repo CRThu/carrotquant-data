@@ -36,6 +36,7 @@ from cq.data.entrypoints.python_api import (
     get_row_count,
     sync
 )
+from cq.data.provider.tdx_downloader import download_and_extract
 
 
 class SPAStaticFiles(StaticFiles):
@@ -288,6 +289,63 @@ KNOWN_TABLE_DEFINITIONS = [
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信大盘与主要指数 1 分钟线数据"
+    },
+    # StockDB 8 表
+    {
+        "table_id": "ashare.kline.1d.raw.stockdb",
+        "name": "StockDB A股日线全截面多因子",
+        "category": "timeseries",
+        "source": "stockdb",
+        "description": "StockDB LevelDB 时序引擎个股日线与截面多因子"
+    },
+    {
+        "table_id": "ashare.kline.1m.raw.stockdb",
+        "name": "StockDB A股1分钟线",
+        "category": "timeseries",
+        "source": "stockdb",
+        "description": "StockDB LevelDB 时序引擎个股 1 分钟超高频行情"
+    },
+    {
+        "table_id": "ashare.adj_factor.stockdb",
+        "name": "StockDB A股后复权因子",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 个股历史除权除息后复权因子 (Event 表)"
+    },
+    {
+        "table_id": "ashare.concept.stockdb",
+        "name": "StockDB 同花顺概念板块",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 同花顺概念板块成分股平铺表 (Event 表)"
+    },
+    {
+        "table_id": "ashare.industry.stockdb",
+        "name": "StockDB 申万行业板块",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 申万一/二/三级行业成分股平铺表 (Event 表)"
+    },
+    {
+        "table_id": "aetf.kline.1d.raw.stockdb",
+        "name": "StockDB 场内ETF日线",
+        "category": "timeseries",
+        "source": "stockdb",
+        "description": "StockDB 场内基金与 ETF 日线 OHLCV 数据"
+    },
+    {
+        "table_id": "aetf.kline.1m.raw.stockdb",
+        "name": "StockDB 场内ETF 1分钟线",
+        "category": "timeseries",
+        "source": "stockdb",
+        "description": "StockDB 场内基金与 ETF 1 分钟超高频行情"
+    },
+    {
+        "table_id": "aetf.adj_factor.stockdb",
+        "name": "StockDB 场内ETF独立复权因子",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 场内基金与 ETF 独立除权分红后复权因子 (Event 表)"
     }
 ]
 
@@ -663,7 +721,6 @@ def run_tdx_download_task(vipdoc_dir: str):
     """后台下载并解压通达信全量 hsjday.zip 包"""
     task_id = "tdx.download.hsjday"
     try:
-        from scripts.download_tdx import download_and_extract
         download_and_extract(Path(vipdoc_dir), task_id=task_id)
     except Exception as e:
         logger.error(f"[REST API] TDX Zip download failed: {e}")

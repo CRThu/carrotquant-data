@@ -6,13 +6,13 @@
 
 ## 1. 项目概述
 
-`CarrotQuant Data` (`carrotquant-data`) 是本地金融数据同步与持久化管理工具，支持从公开数据源（Baostock、东方财富、通达信）获取 A 股与指数数据，经清洗后持久化为本地 CSV/Parquet 文件。
+`CarrotQuant Data` (`carrotquant-data`) 是本地金融数据同步与持久化管理工具，支持从公开数据源（Baostock、东方财富、通达信、StockDB）获取 A 股、场内 ETF 与指数数据，经清洗后持久化为本地 CSV/Parquet 文件。
 
 **核心能力**：
-- 支持 Baostock（日线/5分线/复权因子）、东方财富（概念/行业板块/龙虎榜/机构交易）、通达信（日线/5分/1分线）
+- 支持 Baostock（日线/5分线/复权因子）、东方财富（概念/行业板块/龙虎榜/机构交易）、通达信（日线/5分/1分线）、StockDB（个股/场内ETF 1分/日线全截面多因子/复权因子/同花顺概念/申万行业）
 - 支持 CSV 和 Parquet 两种存储格式
 - 基于时间戳水位线的增量同步与断点续接
-- 四种接入方式：Python SDK (`cq.data.read()` / 链式访问器)、Typer CLI (`cqdata`)、FastAPI REST API 与 React Web 终端 (`web/`)
+- 四种接入方式：Python SDK (`cq.data.read()` / 链式访问器 `cq.data.ashare` / `cq.data.aetf` / `cq.data.aindex`)、Typer CLI (`cqdata`)、FastAPI REST API 与 React Web 终端 (`web/`)
 
 **技术栈**：
 - **后端**：Python >= 3.12, Polars, Baostock, curl_cffi, tdxpy, FastAPI, Typer, Loguru, PyYAML
@@ -26,14 +26,14 @@
 CarrotQuant.Data/
 ├── cq/
 │   └── data/
-│       ├── __init__.py               # 统一导出符号 (ashare, aindex, read, list_tables 等)，0 业务逻辑
+│       ├── __init__.py               # 统一导出符号 (ashare, aetf, aindex, read, list_tables 等)，0 业务逻辑
 │       ├── entrypoints/              # 接入层 (accessors/ OOP子包, python_api, cli, rest_api)
-│       │   ├── accessors/            # OOP 便捷访问层 (base.py, ashare.py, aindex.py)
+│       │   ├── accessors/            # OOP 便捷访问层 (base.py, ashare.py, aetf.py, aindex.py)
 │       │   ├── python_api.py         # Python SDK 底层切片与探查 API
 │       │   ├── cli.py                # Typer CLI 控制台主入口 (cqdata sync/server/info/tables)
 │       │   └── rest_api.py           # FastAPI REST HTTP 服务 (含 Loguru SSE 日志流 & /tables/detailed)
 │       ├── config/                   # 配置管理 (支持 CQDATA_DATA_DIR 环境变量与 YAML)
-│       ├── provider/                 # 数据源驱动层 (Baostock, EastMoney, TDX, DataCleaner, ProviderManager)
+│       ├── provider/                 # 数据源驱动层 (Baostock, EastMoney, TDX, StockDB, DataCleaner, ProviderManager)
 │       ├── service/                  # 业务逻辑层 (SyncManager, SyncProgressTracker, DataReader, TaskPlanner, MetadataManager)
 │       ├── storage/                  # 持久化存储层 (CSVStorage, ParquetStorage, StorageFactory, DataMerger)
 │       └── utils/                    # 工具箱 (logger_utils, time_utils)
@@ -44,7 +44,6 @@ CarrotQuant.Data/
 │   │   ├── services/             # apiClient, pinyin, transformers, indicators
 │   │   └── hooks/                # useMarketData, useConceptData, useTables
 │   └── package.json
-├── scripts/                      # 辅助脚本 (wizard.py 交互向导, download_tdx.py)
 ├── tests/                        # 测试集 (unit, integration)
 └── pyproject.toml                # 项目依赖与构建配置
 ```
@@ -60,9 +59,8 @@ graph TB
     subgraph Entrypoints["Entrypoints 接入层 (cq/data/entrypoints)"]
         WEB["web/ (React Web 终端)"]
         PYTHON_API["python_api.py (Python SDK)"]
-        CLI["cli.py (Typer CLI)"]
+        CLI["cli.py (Typer CLI: cqdata)"]
         REST["rest_api.py (FastAPI REST)"]
-        WIZARD["wizard.py (交互向导)"]
     end
 
     subgraph Service["Service 业务逻辑层 (cq/data/service)"]
@@ -71,6 +69,7 @@ graph TB
         MR["MetadataReader 探查"]
         TP["TaskPlanner 任务规划器"]
         MM["MetadataManager 元数据 IO"]
+        WIZARD["Wizard 向导业务服务"]
     end
 
     subgraph Provider["Provider 数据采集层"]
@@ -78,6 +77,7 @@ graph TB
         BP["BaostockProvider"]
         EP["EastMoneyProvider"]
         TP_DRV["TDXProvider"]
+        SP_DRV["StockDBProvider"]
         DC["DataCleaner 时间标准化"]
     end
 
@@ -92,6 +92,7 @@ graph TB
         BAOSTOCK["Baostock API"]
         EASTMONEY["东财 push2 / datacenter API"]
         TDX["通达信 TCP / vipdoc"]
+        STOCKDB["StockDB LevelDB 时序服务 (:7899)"]
     end
 
     subgraph Disk["磁盘存储"]
@@ -101,6 +102,7 @@ graph TB
     end
 
     CLI --> SM
+    CLI --> WIZARD
     PYTHON_API --> SM
     WIZARD --> SM
 
@@ -112,11 +114,12 @@ graph TB
     SM -->|"⑤ save()"| MM
 
     TP -->|"load()"| MM
-    PM --> BP & EP & TP_DRV
+    PM --> BP & EP & TP_DRV & SP_DRV
     BP --> BAOSTOCK
     EP --> EASTMONEY
     TP_DRV --> TDX
-    BP & EP & TP_DRV --> DC
+    SP_DRV --> STOCKDB
+    BP & EP & TP_DRV & SP_DRV --> DC
 
     SF --> CSV & PQ
     CSV & PQ --> DM
@@ -147,7 +150,7 @@ SyncManager.sync()
 
 ### 4.1 接入层与配置 (Gateway & Config)
 - **`config/settings.py`**: 全局 `Settings` 配置管理，支持自动加载本地 `.env` 环境变量、通过 `cq.data.configure()` 加载 YAML 配置，或使用环境变量 `CQDATA_DATA_DIR` 和 `CQDATA_CONFIG_PATH`。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)，`.env` 模板见 [.env.sample](file:///d:/Quant/carrotquant-data/.env.sample)。
-- **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aindex.kline` 等）与 `DefaultConfig` 三层链式继承解析器（支持 `source`, `format`），默认 `raw` 极速零开销直读原始行情，显式 `adj="adj"` 时调用 `DataAdjuster` 动态后复权折算。
+- **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aetf.kline`, `aindex.kline` 等）与 `DefaultConfig` 三层链式继承解析器（支持 `source`, `format`），默认 `raw` 极速零开销直读原始行情，显式 `adj="adj"` 时调用 `DataAdjuster` 动态后复权折算。
 - **`python_api.py`**: 提供 SDK 高阶 API (`read`, `write`, `register_provider` 双模注册器/类装饰器, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 与动态 Provider 路由为基础，原生支持内置表与自定义外部表。
 - **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
 - **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/tables` 探查与 `GET /api/v1/query` 统一切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
@@ -168,6 +171,7 @@ SyncManager.sync()
 - **`BaostockProvider`**: Baostock 数据驱动，处理个股/指数 K 线与复权因子，支持 RLock 线程锁并发防护、API 错误码 (如网络接收错误/未登录) 识别与自动重新登录 (`_relogin`) 重试。
 - **`EastMoneyProvider`**: 东方财富数据驱动，处理板块成分股、龙虎榜与机构交易，采用 TLS 指纹防封与节流重试。无 symbol 的宏观表 `get_all_symbols` 返回 `["_ALL_"]`。
 - **`TDXProvider`**: 通达信数据驱动，支持 `online` (TCP 在线) 与 `local` (vipdoc 离线) 两种模式，完整覆盖沪深主板、创业板、科创板与北交所（注：`online` 模式受云端 API 限制仅覆盖在交易股票，获取已退市股票建议使用 `local` 离线模式或 Baostock 驱动）。
+- **`StockDBProvider`**: StockDB 本地 LevelDB 时序引擎驱动（127.0.0.1:7899），支持 1m 超高频与 1d 全截面多因子、A 股个股与退市股全覆盖、场内 ETF 独立覆盖、同花顺概念与申万行业平铺映射。内置 `stockdb.pyd` 与 TCP Socket 快速探针。
 - **`DataCleaner`**: 统一清洗时间轴，转换产生 `timestamp` (Int64 ms) 与 `datetime` (ISO8601) 标准列。
 - **`ProviderManager`**: Provider 单例工厂，根据 `table_id` 末段标识路由驱动。
 
@@ -185,23 +189,28 @@ SyncManager.sync()
 
 | 字段 | 说明 | 示例 |
 |:---|:---|:---|
-| market | 市场标识 | `ashare` (A股个股), `aindex` (A股指数) |
-| category | 数据类别 | `kline` (K线), `adj_factor` (复权因子), `dragon_tiger` (龙虎榜), `concept` (概念板块) |
-| freq/adj | 频率/复权 (可选) | `1d` (日线), `5m` (5分钟), `adj` (后复权), `raw` (不复权) |
-| source | 数据源 (末段，路由依据) | `baostock`, `eastmoney`, `tdx` |
+| market | 市场标识 | `ashare` (A股个股), `aetf` (A股场内基金与ETF), `aindex` (A股指数) |
+| category | 数据类别 | `kline` (K线), `adj_factor` (复权因子), `dragon_tiger` (龙虎榜), `concept` (概念板块), `industry` (行业板块) |
+| freq/adj | 频率/复权 (可选) | `1d` (日线), `5m` (5分钟), `1m` (1分钟), `adj` (后复权), `raw` (不复权) |
+| source | 数据源 (末段，路由依据) | `baostock`, `eastmoney`, `tdx`, `stockdb` |
 
 **主要注册表**:
 - `ashare.kline.1d.adj.baostock` / `ashare.kline.1d.raw.baostock` (TS)
 - `ashare.kline.5m.adj.baostock` / `ashare.kline.5m.raw.baostock` (TS)
+- `aindex.kline.1d.raw.baostock` (TS)
 - `ashare.adj_factor.baostock` (EV)
-- `ashare.concept.eastmoney` / `ashare.industry.eastmoney` / `ashare.dragon_tiger.eastmoney` (EV)
+- `ashare.concept.eastmoney` / `ashare.industry.eastmoney` / `ashare.dragon_tiger.eastmoney` / `ashare.inst_trade.eastmoney` (EV)
 - `ashare.kline.1d.raw.tdx` / `ashare.kline.5m.raw.tdx` / `ashare.kline.1m.raw.tdx` (TS)
+- `aindex.kline.1d.raw.tdx` / `aindex.kline.5m.raw.tdx` / `aindex.kline.1m.raw.tdx` (TS)
+- `ashare.kline.1m.raw.stockdb` / `ashare.kline.1d.raw.stockdb` (TS)
+- `ashare.adj_factor.stockdb` (EV)
+- `ashare.concept.stockdb` / `ashare.industry.stockdb` (EV)
+- `aetf.kline.1m.raw.stockdb` / `aetf.kline.1d.raw.stockdb` (TS)
+- `aetf.adj_factor.stockdb` (EV)
 
 ---
 
 ## 6. 存储布局与元数据协议
-
-### 6.1 Hive 分区存储结构
 
 ### 6.1 Hive 分区存储结构
 

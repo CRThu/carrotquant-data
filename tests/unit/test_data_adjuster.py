@@ -256,3 +256,42 @@ class TestDataAdjusterEdgeCases:
         # factor 为 None 或空表时返回原样
         assert DataAdjuster.adjust(df_kline, None)["close"].to_list() == [10.0]
         assert DataAdjuster.adjust(df_kline, pl.DataFrame())["close"].to_list() == [10.0]
+
+    def test_adjust_date_and_timestamp_column_variations(self):
+        """测试使用 date 或 timestamp 列进行日期匹配的场景及无时间列的防御。"""
+        # 使用 date 列
+        df_kline_date = pl.DataFrame({
+            "symbol": ["sh.600000"],
+            "date": ["2024-06-01"],
+            "close": [10.0]
+        })
+        df_factor_date = pl.DataFrame({
+            "symbol": ["sh.600000"],
+            "date": ["2024-06-01"],
+            "back_adj_factor": [2.0]
+        })
+        res_date = DataAdjuster.adjust(df_kline_date, df_factor_date)
+        assert res_date["close"].to_list() == [20.0]
+
+        # 使用 timestamp 整数毫秒列
+        df_kline_ts = pl.DataFrame({
+            "symbol": ["sh.600000"],
+            "timestamp": [1717225200000],
+            "close": [10.0]
+        })
+        df_factor_ts = pl.DataFrame({
+            "symbol": ["sh.600000"],
+            "timestamp": [1717225200000],
+            "back_adj_factor": [2.0]
+        })
+        res_ts = DataAdjuster.adjust(df_kline_ts, df_factor_ts)
+        assert res_ts["close"].to_list() == [20.0]
+
+        # 缺少价格列直接返回
+        df_no_price = pl.DataFrame({"symbol": ["sh.600000"], "volume": [100]})
+        assert DataAdjuster.adjust(df_no_price, df_factor_date)["volume"].to_list() == [100]
+
+        # 缺少时间字段直接返回
+        df_no_time = pl.DataFrame({"symbol": ["sh.600000"], "close": [10.0]})
+        assert DataAdjuster.adjust(df_no_time, df_factor_date)["close"].to_list() == [10.0]
+

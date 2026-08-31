@@ -1,7 +1,7 @@
 """通达信数据工具。
 
 两种数据获取模式:
-  1. local:  读取本地通达信 vipdoc 目录 (由 download_tdx.py 脚本下载解压)
+  1. local:  读取本地通达信 vipdoc 目录 (由 cqdata tdx download 命令下载解压)
   2. online: 通过 tdxpy TCP 在线获取 (日线全历史, 5m~2年, 1m~5月)
 """
 

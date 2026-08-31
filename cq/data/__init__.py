@@ -33,6 +33,7 @@ from cq.data.entrypoints import (
     configure,
     default,
     ashare,
+    aetf,
     aindex
 )
 from cq.data.config import settings
@@ -54,6 +55,7 @@ __all__ = [
     "configure",
     "default",
     "ashare",
+    "aetf",
     "aindex",
     "settings",
     "__version__"

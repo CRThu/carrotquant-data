@@ -318,6 +318,12 @@ class BaostockProvider(BaseProvider):
             if col in df.columns:
                 df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
 
+        # 转换 is_st 为布尔类型 (Baostock "1" -> True, "0" -> False)
+        if "is_st" in df.columns:
+            df = df.with_columns(
+                pl.when(pl.col("is_st") == "1").then(True).otherwise(False).cast(pl.Boolean).alias("is_st")
+            )
+
         # 数据清洗与标准化
         # Baostock 数据源为北京时间 (UTC+8)，显式传入时区参数
         # 强制将日期时间对齐至收盘时间 15:00:00，以确保分区边界安全

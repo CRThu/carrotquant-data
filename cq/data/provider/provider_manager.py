@@ -3,6 +3,7 @@ from cq.data.provider.base import BaseProvider
 from cq.data.provider.baostock_provider import BaostockProvider
 from cq.data.provider.eastmoney_provider import EastMoneyProvider
 from cq.data.provider.tdx_provider import TDXProvider
+from cq.data.provider.stockdb import StockDBProvider
 from cq.data.config.settings import settings
 
 
@@ -78,6 +79,8 @@ class ProviderManager:
                 self._providers[source] = EastMoneyProvider()
             elif source == 'tdx':
                 self._providers[source] = TDXProvider(**kwargs)
+            elif source == 'stockdb':
+                self._providers[source] = StockDBProvider(**kwargs)
             else:
                 raise ValueError(f"Unsupported data source: {source}")
                 

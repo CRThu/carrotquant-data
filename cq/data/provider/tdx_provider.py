@@ -1,7 +1,7 @@
 """通达信数据源驱动实现。
 
 两种数据获取模式:
-  1. local:  读取本地 vipdoc 目录 (由 download_tdx.py 脚本下载解压)
+  1. local:  读取本地 vipdoc 目录 (由 cqdata tdx download 命令下载解压)
   2. online: 通过 tdxpy TCP 在线获取
 
 支持的 table_id:

@@ -22,7 +22,9 @@ from cq.data.entrypoints.python_api import (
     get_schema,
     get_row_count
 )
-from scripts.download_tdx import download_and_extract as tdx_download_and_extract
+
+from cq.data.provider.tdx_downloader import download_and_extract as tdx_download_and_extract
+from cq.data.service.wizard import start_wizard as run_wizard
 
 
 app = typer.Typer(
@@ -112,7 +114,6 @@ def wizard_cmd():
     """
     启动终端交互式同步向导
     """
-    from scripts.wizard import main as run_wizard
     run_wizard()
 
 

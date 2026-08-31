@@ -411,24 +411,25 @@ class TestTdxSymbolFilter:
 
     def test_bj_symbols_baostock_fallback_success(self, provider):
         """当 TDX 不提供 BJ 列表时，自动退避至 BaostockProvider 基础库拉取。"""
+        mock_bp = MagicMock()
+        mock_bp.get_all_symbols.return_value = ["sh.600000", "sz.000001", "bj.832000", "bj.920001"]
         with patch("cq.data.provider.tdx_provider.fetch_stock_list_online") as mock_tdx_fetch, \
-             patch("cq.data.provider.baostock_provider.BaostockProvider.get_all_symbols") as mock_bs_symbols:
+             patch("cq.data.provider.baostock_provider.BaostockProvider", return_value=mock_bp):
             mock_tdx_fetch.side_effect = lambda market: {
                 "sh": ["sh600000"],
                 "sz": ["sz000001"],
                 "bj": [],
             }[market]
-            mock_bs_symbols.return_value = ["sh.600000", "sz.000001", "bj.832000", "bj.920001"]
 
             symbols = provider._get_all_symbols_online("ashare")
             assert "bj.832000" in symbols
             assert "bj.920001" in symbols
-            assert mock_bs_symbols.called
+            assert mock_bp.get_all_symbols.called
 
     def test_bj_symbols_fallback_warning_on_exception(self, provider):
         """当拉取 BJ 列表抛出异常时，抓取逻辑捕获异常、日志 Warning 告警，并放弃 BJ 保证 SH/SZ 顺畅。"""
         with patch("cq.data.provider.tdx_provider.fetch_stock_list_online") as mock_tdx_fetch, \
-             patch("cq.data.provider.baostock_provider.BaostockProvider.get_all_symbols", side_effect=RuntimeError("Baostock down")):
+             patch("cq.data.provider.baostock_provider.BaostockProvider", side_effect=RuntimeError("Baostock down")):
             mock_tdx_fetch.side_effect = lambda market: {
                 "sh": ["sh600000"],
                 "sz": ["sz000001"],
@@ -445,13 +446,13 @@ class TestTdxSymbolFilter:
             mock_tdx_fetch.side_effect = lambda market: {
                 "sh": ["sh600000", "sh900901"],
                 "sz": ["sz000001", "sz200012"],
-                "bj": [],
+                "bj": ["bj832000"],
             }[market]
 
             symbols = provider._get_all_symbols_online("ashare")
             assert "sh.900901" not in symbols
             assert "sz.200012" not in symbols
-            assert symbols == ["sh.600000", "sz.000001"]
+            assert symbols == ["bj.832000", "sh.600000", "sz.000001"]
 
     def test_patch_tdxpy_market2_support(self):
         """验证 tdxpy 的 market=2 (BJ) 补丁机制正常运行，不破坏 SH/SZ，支持 BJ 代码类型转换。"""
@@ -563,6 +564,92 @@ class TestTdxFetchIndexBars:
             mock_api.get_security_bars.assert_called_with(4, 0, "000001", 0, 800)
             assert len(df) == 1
             assert df["symbol"][0] == "sz.000001"
+
+
+# ---------------------------------------------------------------------------
+# TestTdxDownloader
+# ---------------------------------------------------------------------------
+
+class TestTdxDownloader:
+    """测试通达信全量日线包下载器 (tdx_downloader.py)"""
+
+    def test_verify_vipdoc_empty(self, tmp_path):
+        from cq.data.provider.tdx_downloader import verify_vipdoc
+        assert verify_vipdoc(tmp_path) is False
+
+    def test_verify_vipdoc_with_files(self, tmp_path):
+        from cq.data.provider.tdx_downloader import verify_vipdoc
+        sh_dir = tmp_path / "sh" / "lday"
+        sh_dir.mkdir(parents=True)
+        (sh_dir / "sh600000.day").write_bytes(b"dummy")
+
+        sz_dir = tmp_path / "sz" / "lday"
+        sz_dir.mkdir(parents=True)
+        (sz_dir / "sz000001.day").write_bytes(b"dummy")
+
+        assert verify_vipdoc(tmp_path) is True
+
+    @patch("cq.data.provider.tdx_downloader.urlretrieve")
+    def test_download_and_extract(self, mock_urlretrieve, tmp_path):
+        import zipfile
+        import io
+        from cq.data.provider.tdx_downloader import download_and_extract
+
+        # 模拟生成一个真实的测试 zip 内存数据并写入 tempfile
+        def fake_urlretrieve(url, zip_target, reporthook=None):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("sh/lday/sh600000.day", b"test content")
+                zf.writestr("sz/lday/sz000001.day", b"test content")
+                zf.writestr("other/file.txt", b"skip")
+            Path(zip_target).write_bytes(buf.getvalue())
+            if reporthook:
+                reporthook(1, 1024, 1024)
+
+        mock_urlretrieve.side_effect = fake_urlretrieve
+
+        out_dir = tmp_path / "vipdoc_out"
+        download_and_extract(out_dir, task_id="test.download")
+
+        assert (out_dir / "sh" / "lday" / "sh600000.day").exists()
+        assert (out_dir / "sz" / "lday" / "sz000001.day").exists()
+        assert not (out_dir / "other" / "file.txt").exists()
+
+    def test_verify_vipdoc_with_bj_files(self, tmp_path):
+        from cq.data.provider.tdx_downloader import verify_vipdoc
+        bj_dir = tmp_path / "bj" / "lday"
+        bj_dir.mkdir(parents=True)
+        (bj_dir / "bj832000.day").write_bytes(b"dummy")
+        assert verify_vipdoc(tmp_path) is True
+
+    @patch("cq.data.provider.tdx_downloader.urlretrieve")
+    def test_download_and_extract_failure(self, mock_urlretrieve, tmp_path):
+        from cq.data.provider.tdx_downloader import download_and_extract
+        mock_urlretrieve.side_effect = ConnectionError("Network download failed")
+
+        with pytest.raises(ConnectionError, match="Network download failed"):
+            download_and_extract(tmp_path / "fail_out", task_id="test.download.fail")
+
+    @patch("cq.data.provider.tdx_downloader.urlretrieve")
+    def test_download_reporthook_unknown_size(self, mock_urlretrieve, tmp_path):
+        import zipfile
+        import io
+        from cq.data.provider.tdx_downloader import download_and_extract
+
+        def fake_urlretrieve_zero_size(url, zip_target, reporthook=None):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("sh/lday/sh600000.day", b"dummy")
+            Path(zip_target).write_bytes(buf.getvalue())
+            if reporthook:
+                reporthook(1, 1024, 0)  # total_size = 0 (未知大小)
+
+        mock_urlretrieve.side_effect = fake_urlretrieve_zero_size
+        out_dir = tmp_path / "zero_size_out"
+        download_and_extract(out_dir, task_id="test.download.zero_size")
+        assert (out_dir / "sh" / "lday" / "sh600000.day").exists()
+
+
 
 
 

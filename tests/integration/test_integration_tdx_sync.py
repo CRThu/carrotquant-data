@@ -72,7 +72,7 @@ class TestTDXIntegration:
             assert "ashare.kline.1d.raw.tdx" in data["started_tasks"]
 
     def test_tdx_download_endpoint_updates_sync_tracker(self, client, tmp_path):
-        with patch("scripts.download_tdx.urlretrieve") as mock_urlretrieve, \
+        with patch("cq.data.provider.tdx_downloader.urlretrieve") as mock_urlretrieve, \
              patch("zipfile.ZipFile") as mock_zipfile:
             
             mock_zf = MagicMock()

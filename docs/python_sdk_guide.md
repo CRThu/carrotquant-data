@@ -26,13 +26,15 @@ import cq.data
 | API 分类 | 访问路径 / 函数 | 简要说明 |
 | :--- | :--- | :--- |
 | **OOP 便捷读取** | `cq.data.ashare.kline.get()` | 快捷读取 A 股个股 K 线 (默认 `freq="1d"`, `adj="raw"`) |
+| | `cq.data.aetf.kline.get()` | 快捷读取场内基金与 ETF K 线 (支持 `freq="1m"`, 默认 `source="stockdb"`) |
+| | `cq.data.aetf.adj_factor.get()` | 快捷读取场内基金与 ETF 独立复权因子 |
 | | `cq.data.aindex.kline.get()` | 快捷读取 A 股指数 K 线 (默认 `freq="1d"`, 固定 `raw`) |
 | | `cq.data.ashare.adj_factor.get()` | 快捷读取 A 股复权因子 |
-| | `cq.data.ashare.concept.get()` | 快捷读取概念板块成分股 |
-| | `cq.data.ashare.industry.get()` | 快捷读取行业板块成分股 |
+| | `cq.data.ashare.concept.get()` | 快捷读取概念板块成分股 (支持 EastMoney / StockDB) |
+| | `cq.data.ashare.industry.get()` | 快捷读取行业板块成分股 (支持 EastMoney / StockDB) |
 | | `cq.data.ashare.dragon_tiger.get()` | 快捷读取龙虎榜统计数据 |
 | | `cq.data.ashare.inst_trade.get()` | 快捷读取机构买卖每日统计数据 |
-| **链式默认配置** | `cq.data.default` / `cq.data.ashare.default` | 三层链式默认值对象 (表级 > 市场级 > 全局) |
+| **链式默认配置** | `cq.data.default` / `cq.data.ashare.default` / `cq.data.aetf.default` | 三层链式默认值对象 (表级 > 市场级 > 全局) |
 | **数据切片与探查** | `cq.data.read()` | 统一切片读取金融数据（自动按 `table_id` 智能路由，支持自定义表） |
 | | `cq.data.write()` | 统一写入/导入数据至本地（支持时序/事件表，自动生成/更新元数据） |
 | | `cq.data.register_provider()` | 注册自定义数据源 Provider 驱动扩展 |
@@ -48,7 +50,7 @@ import cq.data
 
 
 > [!TIP]
-> **数据字典与字段速查**：各数据表支持的具体字段清单、数据类型定义及各数据源（TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
+> **数据字典与字段速查**：各数据表支持的具体字段清单、数据类型定义及各数据源（StockDB / TDX / Baostock / EastMoney）特化列对照，请参阅专门的 [数据字典与 Schema 全量规范 (Schema Reference)](schema_reference.md)。
 
 ---
 
@@ -77,19 +79,42 @@ df = cq.data.ashare.kline.get(
   - `freq` (`str`, 可选): K 线频率，默认 `"1d"`。支持 `"1d"` (日线), `"5m"` (5分钟线), `"1m"` (1分钟线)。
   - `adj` (`str`, 可选): 复权方式，默认 `"raw"` (不复权)。支持 `"raw"` (不复权) 与 `"adj"` (后复权)。
     - **默认 `"raw"` (零开销纯净直读)**：不产生任何因子表 IO 与内存 Join，以最快速度直读原始行情；
-    - **显式 `"adj"` (动态后复权引擎)**：自动读取底层原始 K 线与 Baostock 权威复权因子表，按 `[symbol, date]` 向量化折算 `open`, `high`, `low`, `close`, `preclose` 价格列，具备完备的停牌保护、高频分钟线跨频对齐与历史短切片前向继承。
+    - **显式 `"adj"` (动态后复权引擎)**：自动读取底层原始 K 线与权威复权因子表，按 `[symbol, date]` 向量化折算 `open`, `high`, `low`, `close` 价格列，具备完备的停牌保护、高频分钟线跨频对齐与历史短切片前向继承。
   - `symbols` (`str` 或 `List[str]`, 可选): 代码或代码列表 (例如 `"sh.600000"` 或 `["sh.600000", "sz.000001"]`)。为 `None` 时读取该表全量代码。
   - `start_date` (`str`, 可选): 起始日期，格式 `"YYYY-MM-DD"` (例如 `"2024-01-01"`)。
   - `end_date` (`str`, 可选): 结束日期，格式 `"YYYY-MM-DD"` (例如 `"2024-06-30"`)。
   - `columns` (`List[str]`, 可选): 选挑投影字段列表 (例如 `["timestamp", "close", "volume"]`)。
-  - `source` (`str`, 可选): 显式指定 K 线数据源 (如 `"baostock"`, `"tdx"`)。若未指定则由 `DefaultConfig` 继承链决定。
+  - `source` (`str`, 可选): 显式指定 K 线数据源 (如 `"stockdb"`, `"baostock"`, `"tdx"`)。若未指定则由 `DefaultConfig` 继承链决定。
   - `format` (`str`, 可选): K 线存储格式 (如 `"parquet"`, `"csv"`, `"auto"`)。若未指定由 `DefaultConfig` 继承链决定。
 - **返回值 (Returns)**:
   - `pl.DataFrame`: 包含时间戳与 K 线指标的 Polars DataFrame。
 
 ---
 
-#### 3.1.2 `cq.data.aindex.kline.get()`
+#### 3.1.2 `cq.data.aetf.kline.get()` 与 `cq.data.aetf.adj_factor.get()`
+
+读取场内基金与 ETF K 线行情及独立复权因子（默认回退至 `"stockdb"` 数据源，完整覆盖 1/5 号段共 2,000+ 场内基金与 ETF）。
+
+```python
+# 读取场内 ETF 1分钟或日线行情
+etf_df = cq.data.aetf.kline.get(
+    freq="1m",
+    adj="raw",
+    symbols="sz.159919",
+    start_date="2025-01-02",
+    end_date="2025-01-02"
+)
+
+# 动态后复权读取
+etf_adj_df = cq.data.aetf.kline.get(symbols="sz.159919", adj="adj")
+
+# 独立复权因子直读
+etf_factor_df = cq.data.aetf.adj_factor.get(symbols="sz.159919")
+```
+
+---
+
+#### 3.1.3 `cq.data.aindex.kline.get()`
 
 读取 A 股指数 K 线数据 (指数无复权，固定 `raw`)。
 
@@ -114,7 +139,7 @@ df = cq.data.aindex.kline.get(
 
 ---
 
-#### 3.1.3 `cq.data.ashare.adj_factor.get()`
+#### 3.1.4 `cq.data.ashare.adj_factor.get()`
 
 读取 A 股个股后复权因子数据。
 
@@ -134,7 +159,7 @@ df = cq.data.ashare.adj_factor.get(
 
 ---
 
-#### 3.1.4 `cq.data.ashare.concept.get()` / `industry.get()` / `dragon_tiger.get()` / `inst_trade.get()`
+#### 3.1.5 `cq.data.ashare.concept.get()` / `industry.get()` / `dragon_tiger.get()` / `inst_trade.get()`
 
 读取 A 股概念板块成分股、行业板块成分股、龙虎榜统计与机构交易数据。
 
@@ -150,19 +175,52 @@ df_inst = cq.data.ashare.inst_trade.get(symbols=None, start_date=None, end_date=
 
 ---
 
-#### 3.1.5 `cq.data.default` / `cq.data.ashare.default` / `cq.data.ashare.kline.default`
+#### 3.1.6 `cq.data.default` / `cq.data.ashare.default` / `cq.data.aetf.default` (链式配置与 Fallback 机制)
 
-三层链式默认值配置对象（专一管理底层物理存储配置）。
+三层链式默认值配置对象（专一管理底层物理存储配置与数据源路由）。
 
 ```python
 cq.data.default.source = "tdx"                      # 1. 全局默认数据源
-cq.data.ashare.default.source = "baostock"           # 2. 市场级默认数据源
-cq.data.ashare.kline.default.format = "parquet"     # 3. 表级默认存储格式
+cq.data.ashare.default.source = "baostock"           # 2. A 股市场级默认数据源
+cq.data.aetf.default.source = "stockdb"             # 3. 场内基金市场级默认数据源
+cq.data.ashare.kline.default.format = "parquet"     # 4. 表级默认存储格式
 ```
 
-- **属性说明**:
-  - `.source`: 配置数据源 (`"baostock"`, `"eastmoney"`, `"tdx"`)。
-  - `.format`: 配置持久化存储格式 (`"parquet"`, `"csv"`)。
+##### 1. 各访问器内置 Fallback 默认值对照表
+
+当用户未做任何手动配置时，系统自动按各资产分类的专属兜底策略（Fallback）解析：
+
+| 访问器路径 | 类别 | 默认数据源 (`fallback_source`) | 默认存储格式 (`fallback_format`) | 说明 |
+| :--- | :---: | :---: | :---: | :--- |
+| `cq.data.ashare.kline` | TS | `"baostock"` | `"parquet"` | A 股个股 K 线 |
+| `cq.data.ashare.adj_factor` | EV | `"baostock"` | `"parquet"` | A 股个股后复权因子 |
+| `cq.data.ashare.concept` | EV | `"eastmoney"` | `"parquet"` | 概念板块成分股 |
+| `cq.data.ashare.industry` | EV | `"eastmoney"` | `"parquet"` | 行业板块成分股 |
+| `cq.data.ashare.dragon_tiger` | EV | `"eastmoney"` | `"parquet"` | 龙虎榜每日统计 |
+| `cq.data.ashare.inst_trade` | EV | `"eastmoney"` | `"parquet"` | 机构席位交易统计 |
+| `cq.data.aetf.kline` | TS | `"stockdb"` | `"parquet"` | 场内基金与 ETF K 线 |
+| `cq.data.aetf.adj_factor` | EV | `"stockdb"` | `"parquet"` | 场内基金独立复权因子 |
+| `cq.data.aindex.kline` | TS | `"baostock"` | `"parquet"` | 大盘指数 K 线 |
+| `cq.data.default` (全局) | 全局 | `"baostock"` | `"parquet"` | 全局顶层兜底 |
+
+##### 2. 5 级配置解析优先级（从高到低）
+
+`resolve_source()` 与 `resolve_format()` 严格遵循以下优先级判定顺序（由高到低，先命中即生效）：
+
+| 优先级 | 层级 | 配置方式 / 示例 | 说明 |
+| :---: | :--- | :--- | :--- |
+| **1** | **方法参数显式指定** | `kline.get(source="tdx", format="csv")` | 最高优先级，仅对当前单次调用生效 |
+| **2** | **表级显式覆盖** | `cq.data.ashare.kline.default.source = "..."` | 用户主动设置，覆盖市场级与全局级 |
+| **3** | **市场级显式覆盖** | `cq.data.ashare.default.source = "..."` | 用户主动设置，作用于整个资产大类 |
+| **4** | **全局级显式覆盖** | `cq.data.default.source = "..."` / YAML 配置 | 用户主动设置，全局生效 |
+| **5** | **自身专属 Fallback** | `cq.data.aetf` 默认兜底为 `"stockdb"` | 系统开箱即用的资产分类内置默认值 |
+| **6** | **系统全局 Fallback** | 终极兜底为 `"baostock"` / `"parquet"` | 系统级兜底保障 |
+
+##### 3. 动态后复权因子表探测与自动回退策略
+
+当调用 `kline.get(adj="adj")` 执行动态后复权时，系统通过 `ProviderManager` 契约动态探查复权因子：
+- **同源绑定**：若当前 K 线数据源自带因子表（如 `baostock`、`stockdb`），自动无缝绑定其同源复权因子；
+- **优雅回退**：若当前 K 线数据源为纯行情源（如 `tdx`），自动回退至权威因子源（`baostock`），无需用户手动切换。
 
 ---
 

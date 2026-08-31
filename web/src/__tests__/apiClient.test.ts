@@ -8,8 +8,8 @@ describe('apiClient full execution coverage test suite', () => {
     vi.restoreAllMocks();
   });
 
-  it('should verify DATA_SOURCE_OPTIONS contains all 16 built-in tables including TDX index and share', () => {
-    expect(DATA_SOURCE_OPTIONS.length).toBe(16);
+  it('should verify DATA_SOURCE_OPTIONS contains all 24 built-in tables including TDX, Baostock, EastMoney and StockDB', () => {
+    expect(DATA_SOURCE_OPTIONS.length).toBe(24);
     const tableIds = DATA_SOURCE_OPTIONS.map((opt) => opt.table_id);
     expect(tableIds).toContain('aindex.kline.1d.raw.tdx');
     expect(tableIds).toContain('aindex.kline.5m.raw.tdx');
@@ -19,6 +19,10 @@ describe('apiClient full execution coverage test suite', () => {
     expect(tableIds).toContain('aindex.kline.1d.raw.baostock');
     expect(tableIds).toContain('ashare.adj_factor.baostock');
     expect(tableIds).toContain('ashare.inst_trade.eastmoney');
+    expect(tableIds).toContain('ashare.kline.1m.raw.stockdb');
+    expect(tableIds).toContain('aetf.kline.1m.raw.stockdb');
+    expect(tableIds).toContain('ashare.concept.stockdb');
+    expect(tableIds).toContain('ashare.industry.stockdb');
   });
 
   it('should correctly identify TDX tables and distinguish known built-in vs offline custom tables', () => {

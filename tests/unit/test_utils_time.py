@@ -1,7 +1,13 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from cq.data.utils.time_utils import parse_date_to_ts, ts_to_iso, ts_to_str
+from cq.data.utils.time_utils import (
+    parse_date_to_ts,
+    ts_to_iso,
+    ts_to_str,
+    align_to_day_start,
+    align_to_day_end
+)
 
 def test_parse_date_to_ts_asia_shanghai():
     """
@@ -210,3 +216,33 @@ def test_cross_timezone_verification():
     # 验证 display 为 Asia/Shanghai 时显示 08:00:00
     iso_str = ts_to_iso(ts, display_tz="Asia/Shanghai")
     assert iso_str == "2024-01-01T08:00:00.000+08:00"
+
+
+def test_align_to_day_start_and_end():
+    """测试 align_to_day_start 和 align_to_day_end 准确对齐到当天零点与末尾"""
+    # 2024-06-01 15:30:45.123 Asia/Shanghai
+    dt = datetime(2024, 6, 1, 15, 30, 45, 123000, tzinfo=ZoneInfo("Asia/Shanghai"))
+    ts = int(dt.timestamp() * 1000)
+
+    start_ts = align_to_day_start(ts, display_tz="Asia/Shanghai")
+    end_ts = align_to_day_end(ts, display_tz="Asia/Shanghai")
+
+    assert ts_to_iso(start_ts) == "2024-06-01T00:00:00.000+08:00"
+    assert ts_to_iso(end_ts) == "2024-06-01T23:59:59.999+08:00"
+
+    # 空值防御
+    assert align_to_day_start(0) == 0
+    assert align_to_day_end(0) == 0
+
+
+def test_ts_to_str_microsecond_and_overflow():
+    """测试 format 包含 %f 时的毫秒截断与溢出容错"""
+    dt = datetime(2024, 6, 1, 12, 0, 0, 123456, tzinfo=ZoneInfo("Asia/Shanghai"))
+    ts = int(dt.timestamp() * 1000)
+
+    res = ts_to_str(ts, fmt="%Y-%m-%d %H:%M:%S.%f")
+    assert res == "2024-06-01 12:00:00.123"
+
+    # 极大溢出时间戳
+    assert ts_to_str(10**18) == "1970-01-01"
+    assert ts_to_iso(10**18) == ""

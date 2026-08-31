@@ -21,6 +21,7 @@ from cq.data.entrypoints.python_api import (
 from cq.data.entrypoints.accessors import (
     default,
     ashare,
+    aetf,
     aindex
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "configure",
     "default",
     "ashare",
+    "aetf",
     "aindex"
 ]
 

@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 import polars as pl
 
 import cq.data
-from cq.data.entrypoints.accessors import DefaultConfig, AShareKline, AIndexKline, AShareConcept, AShare
+from cq.data.entrypoints.accessors.base import DefaultConfig
 
 
 def test_default_config_chain():
@@ -173,3 +173,63 @@ def test_configure_from_yaml(tmp_path):
     cq.data.settings.data_dir = "data"
     cq.data.default.source = None
     cq.data.default.adj = None
+
+
+def test_aetf_accessor(mock_baostock, temp_data_dir):
+    """测试 AETF 命名空间访问器 (kline, adj_factor) 及其动态后复权"""
+    raw_df = pl.DataFrame({
+        "symbol": ["sz.159919"],
+        "datetime": ["2024-06-01T15:00:00.000+08:00"],
+        "timestamp": [1717225200000],
+        "open": [3.0],
+        "high": [3.1],
+        "low": [2.9],
+        "close": [3.05],
+        "volume": [50000.0],
+    })
+    factor_df = pl.DataFrame({
+        "symbol": ["sz.159919"],
+        "datetime": ["2024-06-01T15:00:00.000+08:00"],
+        "timestamp": [1717225200000],
+        "back_adj_factor": [2.0],
+    })
+
+    def mock_read_aetf(table_id, symbols=None, start_date=None, end_date=None, columns=None, format="auto"):
+        if "kline" in table_id:
+            return raw_df
+        elif "adj_factor" in table_id:
+            return factor_df
+        return pl.DataFrame()
+
+    with patch("cq.data.entrypoints.accessors.base.read", side_effect=mock_read_aetf) as mock_read:
+        # 1. raw 直读
+        df_raw = cq.data.aetf.kline.get(symbols="sz.159919")
+        assert not df_raw.is_empty()
+        mock_read.assert_called_with(
+            table_id="aetf.kline.1d.raw.stockdb",
+            symbols="sz.159919",
+            start_date=None,
+            end_date=None,
+            columns=None,
+            format="parquet"
+        )
+
+        mock_read.reset_mock()
+
+        # 2. 动态后复权
+        df_adj = cq.data.aetf.kline.get(symbols="sz.159919", adj="adj")
+        assert df_adj["close"].to_list() == [6.1]
+        assert df_adj["open"].to_list() == [6.0]
+
+        mock_read.reset_mock()
+
+        # 3. 独立复权因子直读
+        cq.data.aetf.adj_factor.get(symbols="sz.159919")
+        mock_read.assert_called_with(
+            table_id="aetf.adj_factor.stockdb",
+            symbols="sz.159919",
+            start_date=None,
+            end_date=None,
+            columns=None,
+            format="parquet"
+        )

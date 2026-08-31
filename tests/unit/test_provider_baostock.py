@@ -91,6 +91,23 @@ class TestEmptyDataDefense:
         assert df.schema["open"] == pl.Float64
         assert df.schema["close"] == pl.Float64
         assert df.schema["volume"] == pl.Float64
+        assert df.schema["is_st"] == pl.Boolean
+
+    def test_fetch_kline_is_st_boolean_conversion(self, provider, mock_baostock):
+        """测试 is_st 字段从 Baostock 字符串 '1'/'0' 转换为布尔值 True/False。"""
+        mock_rs = MagicMock()
+        mock_rs.error_code = "0"
+        mock_rs.next.side_effect = [True, True, False]
+        mock_rs.get_row_data.side_effect = [
+            ["2024-01-02", "sh.600000", "6.63", "6.65", "6.60", "6.60", "6.20", "22066700", "146066304", "3", "0.0752", "1", "-0.302", "5.0", "0.32", "2.3", "8.9", "1"],
+            ["2024-01-03", "sh.600000", "6.60", "6.62", "6.58", "6.61", "6.60", "20000000", "130000000", "3", "0.0650", "1", "0.151", "5.0", "0.32", "2.3", "8.9", "0"],
+        ]
+        mock_baostock.query_history_k_data_plus.return_value = mock_rs
+
+        df = provider.fetch("ashare.kline.1d.raw.baostock", "sh.600000", "2024-01-01", "2024-01-05")
+        assert len(df) == 2
+        assert df.schema["is_st"] == pl.Boolean
+        assert df["is_st"].to_list() == [True, False]
 
     def test_empty_adj_factor_returns_standardized_empty(self, provider):
         """空复权因子数据应返回含标准列类型的空 DataFrame，时区已归一化。"""

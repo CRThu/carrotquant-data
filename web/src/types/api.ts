@@ -7,12 +7,12 @@ export interface DataSourceOption {
   id: string;
   name: string;
   table_id: string;
-  category: 'ashare' | 'aindex' | 'concept' | 'dragon_tiger' | 'inst_trade' | 'adj_factor';
-  source: 'baostock' | 'eastmoney' | 'tdx';
+  category: 'ashare' | 'aetf' | 'aindex' | 'concept' | 'dragon_tiger' | 'inst_trade' | 'adj_factor';
+  source: 'baostock' | 'eastmoney' | 'tdx' | 'stockdb';
   description: string;
 }
 
-// 预定义常用的金融终端数据源选项 (全量 16 个内置数据表)
+// 预定义常用的金融终端数据源选项 (全量 24 个内置数据表)
 export const DATA_SOURCE_OPTIONS: DataSourceOption[] = [
   // Baostock 6 表
   {
@@ -144,6 +144,71 @@ export const DATA_SOURCE_OPTIONS: DataSourceOption[] = [
     category: 'aindex',
     source: 'tdx',
     description: '通达信大盘与主要指数 1 分钟线数据'
+  },
+  // StockDB 8 表
+  {
+    id: 'ashare_kline_1m_raw_stockdb',
+    name: 'StockDB A股1分钟线 (不复权)',
+    table_id: 'ashare.kline.1m.raw.stockdb',
+    category: 'ashare',
+    source: 'stockdb',
+    description: 'StockDB 本地 1 分钟高频 K 线数据 (含 900+ 退市股全生命周期)'
+  },
+  {
+    id: 'ashare_kline_1d_raw_stockdb',
+    name: 'StockDB A股日线 (不复权/全截面因子)',
+    table_id: 'ashare.kline.1d.raw.stockdb',
+    category: 'ashare',
+    source: 'stockdb',
+    description: 'StockDB 本地个股日线 OHLCV 及全量截面多因子 (市值/估值/量比/ST)'
+  },
+  {
+    id: 'ashare_adj_factor_stockdb',
+    name: 'StockDB A股后复权因子',
+    table_id: 'ashare.adj_factor.stockdb',
+    category: 'adj_factor',
+    source: 'stockdb',
+    description: 'StockDB 全量个股除权除息与后复权因子 (Event 表)'
+  },
+  {
+    id: 'ashare_concept_stockdb',
+    name: 'StockDB 同花顺概念板块成分',
+    table_id: 'ashare.concept.stockdb',
+    category: 'concept',
+    source: 'stockdb',
+    description: 'StockDB 1200+ 同花顺概念板块与成分股映射 (Event 表)'
+  },
+  {
+    id: 'ashare_industry_stockdb',
+    name: 'StockDB 申万行业板块成分',
+    table_id: 'ashare.industry.stockdb',
+    category: 'concept',
+    source: 'stockdb',
+    description: 'StockDB 申万一/二/三级行业分类与成分股映射 (Event 表)'
+  },
+  {
+    id: 'aetf_kline_1m_raw_stockdb',
+    name: 'StockDB 场内基金/ETF 1分钟线',
+    table_id: 'aetf.kline.1m.raw.stockdb',
+    category: 'aetf',
+    source: 'stockdb',
+    description: 'StockDB 1/5 号段场内基金与 ETF 1 分钟超高频行情'
+  },
+  {
+    id: 'aetf_kline_1d_raw_stockdb',
+    name: 'StockDB 场内基金/ETF 日线',
+    table_id: 'aetf.kline.1d.raw.stockdb',
+    category: 'aetf',
+    source: 'stockdb',
+    description: 'StockDB 1/5 号段场内基金与 ETF 日线 OHLCV 行情'
+  },
+  {
+    id: 'aetf_adj_factor_stockdb',
+    name: 'StockDB 场内基金/ETF 独立复权因子',
+    table_id: 'aetf.adj_factor.stockdb',
+    category: 'adj_factor',
+    source: 'stockdb',
+    description: 'StockDB 场内基金与 ETF 独立历史分红拆分复权因子 (Event 表)'
   }
 ];
 

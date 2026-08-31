@@ -78,7 +78,12 @@ class AShareKline(_BaseTable):
             return self._apply_columns(df_kline, columns)
 
         # 读取复权因子表 (不加 start_date 截断，仅限制 <= end_date 以向前追溯历史因子)
-        factor_table_id = f"{self._FACTOR_PREFIX}.{self._FACTOR_SOURCE}"
+        factor_source = self._resolve_factor_source(
+            kline_source=resolved_kline_source,
+            factor_prefix=self._FACTOR_PREFIX,
+            fallback_factor_source=self._FACTOR_SOURCE
+        )
+        factor_table_id = f"{self._FACTOR_PREFIX}.{factor_source}"
         df_factor = self._read_table(
             table_id=factor_table_id,
             symbols=symbols,

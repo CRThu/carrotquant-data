@@ -1,39 +1,28 @@
-"""通达信日线行情包下载脚本。
+"""
+cqdata/provider/tdx_downloader.py
 
-从通达信官方服务器下载全量日线数据包 (hsjday.zip) 并解压到 vipdoc 目录，
-供 TDXProvider(mode='local') 用于日线历史数据极速初始化。
-
-用法:
-    uv run scripts/download_tdx.py                         # 下载到默认 vipdoc 目录 (./vipdoc)
-    uv run scripts/download_tdx.py --output C:/new_tdx/vipdoc  # 指定自定义 vipdoc 目录
+通达信官方全量日线行情包 (hsjday.zip) 下载、解压部署与目录验证专用模块。
 """
 
-import argparse
-import sys
+import time
 import tempfile
 import zipfile
 from pathlib import Path
 from urllib.request import urlretrieve
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from loguru import logger
+from cq.data.service.sync_tracker import sync_tracker
 
-# TDX 数据源 URL
+# 通达信官方日线行情包下载 URL
 TDX_DAILY_URL = "https://data.tdx.com.cn/vipdoc/hsjday.zip"
-
-# 需要提取的目录前缀
 _EXTRACT_PREFIXES = ("sh/lday/", "sz/lday/", "bj/lday/")
 
 
-import time
-
-
-def download_and_extract(output_dir: Path, task_id: str = "tdx.download.hsjday"):
-    """下载 hsjday.zip 并解压到 vipdoc 目录，同时向 sync_tracker 注册并更新进度。"""
+def download_and_extract(output_dir: Path, task_id: str = "tdx.download.hsjday") -> None:
+    """
+    从官方服务器下载全量日线包 hsjday.zip 并解压到 vipdoc 目录，同时向 sync_tracker 注册并更新进度。
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    from cq.data.service.sync_tracker import sync_tracker
     sync_tracker.start_task(task_id, message="正在准备从官方服务器下载通达信全量日线包 hsjday.zip...")
 
     last_log_time = 0.0
@@ -45,7 +34,6 @@ def download_and_extract(output_dir: Path, task_id: str = "tdx.download.hsjday")
         now = time.time()
         downloaded = block_num * block_size
 
-        # 首次或每隔 1.0 秒，或已全部下载完成时输出一行 Log
         if now - last_log_time >= 1.0 or (total_size > 0 and downloaded >= total_size):
             time_diff = now - last_log_time
             speed = (downloaded - last_downloaded) / time_diff if time_diff > 0 else 0
@@ -70,11 +58,11 @@ def download_and_extract(output_dir: Path, task_id: str = "tdx.download.hsjday")
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = Path(tmp_dir) / "hsjday.zip"
 
-            logger.info("正在下载: %s", TDX_DAILY_URL)
+            logger.info(f"正在下载: {TDX_DAILY_URL}")
             urlretrieve(TDX_DAILY_URL, str(zip_path), reporthook=progress_reporthook)
-            logger.info("下载完成: %s", zip_path)
+            logger.info(f"下载完成: {zip_path}")
 
-            logger.info("正在解压到: %s", output_dir)
+            logger.info(f"正在解压到: {output_dir}")
             sync_tracker.update_progress(task_id, current=1, total=1, message=f"正在解压至 {output_dir}...")
             extracted = 0
             with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -96,7 +84,7 @@ def download_and_extract(output_dir: Path, task_id: str = "tdx.download.hsjday")
         raise e
 
 
-def verify_vipdoc(vipdoc_dir: Path):
+def verify_vipdoc(vipdoc_dir: Path) -> bool:
     """验证 vipdoc 目录结构并统计代码数量。"""
     sh_count = 0
     sz_count = 0
@@ -124,58 +112,4 @@ def verify_vipdoc(vipdoc_dir: Path):
         logger.warning("vipdoc 目录为空，请检查下载是否成功")
         return False
 
-    # 采样验证
-    sample_files = list((vipdoc_dir / "sh" / "lday").glob("*.day"))[:3]
-    for f in sample_files:
-        data = f.read_bytes()
-        from app.provider.tdx_utils import parse_tdx_day_data
-        records = parse_tdx_day_data(data)
-        if records:
-            logger.info("  采样 %s: %d 条, %s ~ %s",
-                f.stem, len(records),
-                records[0]["date"], records[-1]["date"])
-
     return True
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="通达信数据下载",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  %(prog)s                                     # 下载到默认 vipdoc 目录
-  %(prog)s --output C:/new_tdx/vipdoc          # 指定输出目录
-
-下载后使用:
-  TDXProvider(mode='local', vipdoc_dir='vipdoc')
-""",
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=str,
-        default="vipdoc",
-        help="vipdoc 输出目录 (默认: vipdoc)",
-    )
-
-    args = parser.parse_args()
-
-    output_dir = Path(args.output)
-
-    logger.info("=" * 60)
-    logger.info("通达信数据下载")
-    logger.info("输出目录: %s", output_dir)
-    logger.info("=" * 60)
-
-    download_and_extract(output_dir)
-
-    logger.info("")
-    verify_vipdoc(output_dir)
-
-    logger.info("")
-    logger.info("完成! 使用方式:")
-    logger.info("  TDXProvider(mode='local', vipdoc_dir='%s')", output_dir)
-
-
-if __name__ == "__main__":
-    main()

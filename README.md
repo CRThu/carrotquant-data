@@ -8,12 +8,12 @@
 
 ## 🛠️ 特性 (Features)
 
-- **多数据源支持**：内置 [Baostock](http://baostock.com/)、东方财富、[通达信 (tdxpy)](https://github.com/rainx/tdxPy) 等金融数据源驱动，支持灵活扩展。
+- **多数据源支持**：内置 [Baostock](http://baostock.com/)、东方财富、[通达信 (tdxpy)](https://github.com/rainx/tdxPy)、[StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) 等金融数据源驱动，支持灵活扩展。
 - **灵活的存储格式**：原生支持 `csv` 与列式存储 `parquet` 格式。
 - **增量与全量同步**：基于时间戳水位线机制，支持断点续接（增量拉取）与全量覆盖更新。
 - **多接入方式**：
   - **React Web 终端**：基于 Bun + Vite + React 19 构建，集成 TradingView Lightweight Charts (3-Pane 图表)、多维搜索与数据管理面板。
-  - **Python SDK**：直观的 `import cq.data` API，支持高性能跨年份数据切片读取 (`cq.data.read`)、`columns` 按需投影与元数据探查。
+  - **Python SDK**：直观的 `import cq.data` API，支持高性能跨年份数据切片读取 (`cq.data.read`)、`columns` 按需投影、`cq.data.ashare` / `cq.data.aetf` / `cq.data.aindex` 命名空间访问与元数据探查。
   - **命令行工具 (CLI)**：统一的 `cqdata` 命令行工具，提供数据同步 (`cqdata sync`)、数据表探索 (`cqdata tables`) 与服务启动 (`cqdata server`)。
   - **REST API 服务**：基于 FastAPI 的 HTTP 服务，支持数据切片、任务调度与 SSE 实时日志流。
 - **列式数据处理**：使用 [Polars](https://pola.rs/) 进行高效的数据清洗与结构转换。
@@ -24,18 +24,15 @@
 CarrotQuant.Data/
 ├── cq/
 │   └── data/         # 核心代码包 (import cq.data)
-│       ├── entrypoints/  # 接入层 (python_api, cli, rest_api)
+│       ├── entrypoints/  # 接入层 (accessors/, python_api, cli, rest_api)
 │       ├── config/       # 配置管理模块
-│       ├── provider/     # 数据源驱动 (BaostockProvider, EastMoneyProvider, TDXProvider)
-│       ├── service/      # 核心业务逻辑 (DataReader, MetadataReader, SyncManager 等)
+│       ├── provider/     # 数据源驱动 (Baostock, EastMoney, TDX, StockDB)
+│       ├── service/      # 核心业务逻辑 (DataReader, MetadataReader, SyncManager, Wizard 等)
 │       ├── storage/      # 本地持久化存储 (CSVStorage, ParquetStorage)
 │       └── utils/        # 通用工具箱
 ├── web/              # React Web 金融终端 (Bun + Vite 6 + React 19 + TradingView 3-Pane)
 │   ├── src/          # 视图 View、组件 Component、Hooks 与转换服务
 │   └── package.json
-├── scripts/
-│   ├── wizard.py         # 交互向导脚本 (也可通过 cqdata wizard 运行)
-│   └── download_tdx.py   # 通达信数据下载脚本
 ├── tests/            # 单元测试与集成测试
 ├── config/           # 项目配置文件存放目录
 ├── logs/             # 系统运行日志目录
@@ -49,9 +46,8 @@ CarrotQuant.Data/
 graph TB
     subgraph Entrypoints["接入层 (cq/data/entrypoints)"]
         PYTHON_API["python_api.py<br/>(Python SDK)"]
-        CLI["cli.py<br/>(Typer CLI)"]
+        CLI["cli.py<br/>(Typer CLI: cqdata)"]
         REST["rest_api.py<br/>(FastAPI REST)"]
-        WIZARD["wizard.py<br/>(交互向导)"]
     end
 
     subgraph Service["业务逻辑层 (cq/data/service)"]
@@ -67,6 +63,7 @@ graph TB
         BP["BaostockProvider"]
         EP["EastMoneyProvider"]
         TDX_PROV["TDXProvider"]
+        SP["StockDBProvider"]
     end
 
     subgraph Storage["存储层 (cq/data/storage)"]
@@ -93,30 +90,39 @@ graph TB
     PM --> BP
     PM --> EP
     PM --> TDX_PROV
+    PM --> SP
     SF --> CSV
     SF --> PQ
 ```
 
 ## 📊 支持的数据表 (Supported Tables)
 
-| Table ID | 类型 | 说明 |
-|----------|------|------|
-| `ashare.kline.1d.adj.baostock` | TS | A 股日线后复权 |
-| `ashare.kline.1d.raw.baostock` | TS | A 股日线不复权 |
-| `ashare.kline.5m.adj.baostock` | TS | A 股 5 分钟线后复权 |
-| `ashare.kline.5m.raw.baostock` | TS | A 股 5 分钟线不复权 |
-| `aindex.kline.1d.raw.baostock` | TS | A 股指数日线 |
-| `ashare.adj_factor.baostock` | EV | A 股复权因子 |
-| `ashare.concept.eastmoney` | EV | 概念板块成分股 |
-| `ashare.industry.eastmoney` | EV | 行业板块成分股 |
-| `ashare.dragon_tiger.eastmoney` | EV | 龙虎榜 |
-| `ashare.inst_trade.eastmoney` | EV | 机构买卖每日统计 |
-| `ashare.kline.1d.raw.tdx` | TS | A 股日线 (通达信) |
-| `ashare.kline.5m.raw.tdx` | TS | A 股 5 分钟线 (通达信) |
-| `ashare.kline.1m.raw.tdx` | TS | A 股 1 分钟线 (通达信) |
-| `aindex.kline.1d.raw.tdx` | TS | 指数日线 (通达信) |
-| `aindex.kline.5m.raw.tdx` | TS | 指数 5 分钟线 (通达信) |
-| `aindex.kline.1m.raw.tdx` | TS | 指数 1 分钟线 (通达信) |
+| Table ID | 类型 | 说明 | 数据源 |
+|----------|------|------|--------|
+| `ashare.kline.1d.adj.baostock` | TS | A 股日线后复权 | Baostock |
+| `ashare.kline.1d.raw.baostock` | TS | A 股日线不复权 | Baostock |
+| `ashare.kline.5m.adj.baostock` | TS | A 股 5 分钟线后复权 | Baostock |
+| `ashare.kline.5m.raw.baostock` | TS | A 股 5 分钟线不复权 | Baostock |
+| `aindex.kline.1d.raw.baostock` | TS | A 股指数日线 | Baostock |
+| `ashare.adj_factor.baostock` | EV | A 股复权因子 | Baostock |
+| `ashare.concept.eastmoney` | EV | 概念板块成分股 | 东方财富 |
+| `ashare.industry.eastmoney` | EV | 行业板块成分股 | 东方财富 |
+| `ashare.dragon_tiger.eastmoney` | EV | 龙虎榜 | 东方财富 |
+| `ashare.inst_trade.eastmoney` | EV | 机构买卖每日统计 | 东方财富 |
+| `ashare.kline.1d.raw.tdx` | TS | A 股日线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `ashare.kline.5m.raw.tdx` | TS | A 股 5 分钟线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `ashare.kline.1m.raw.tdx` | TS | A 股 1 分钟线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `aindex.kline.1d.raw.tdx` | TS | 指数日线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `aindex.kline.5m.raw.tdx` | TS | 指数 5 分钟线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `aindex.kline.1m.raw.tdx` | TS | 指数 1 分钟线 (通达信) | [TDX](https://github.com/rainx/tdxPy) |
+| `ashare.kline.1d.raw.stockdb` | TS | A 股日线全截面多因子 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `ashare.kline.1m.raw.stockdb` | TS | A 股 1 分钟线 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `ashare.adj_factor.stockdb` | EV | A 股复权因子 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `ashare.concept.stockdb` | EV | 同花顺概念成分股 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `ashare.industry.stockdb` | EV | 申万行业成分股 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `aetf.kline.1d.raw.stockdb` | TS | 场内 ETF 日线 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `aetf.kline.1m.raw.stockdb` | TS | 场内 ETF 1 分钟线 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
+| `aetf.adj_factor.stockdb` | EV | 场内 ETF 独立复权因子 | [StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) |
 
 ## 🛠️ 安装指南 (Installation)
 
@@ -183,6 +189,10 @@ cq.data.settings.data_dir = "./custom_data"
 # 1. OOP 便捷读取 (默认 raw 零开销直读，显式 adj='adj' 自动触发向量化动态后复权)
 df_raw = cq.data.ashare.kline.get(symbols="sh.600000", start_date="2024-01-01")
 df_adj = cq.data.ashare.kline.get(symbols="sh.600000", adj="adj", start_date="2024-01-01")
+
+# 场内基金与 ETF 便捷读取 (支持 StockDB 1m 高频线与动态后复权)
+etf_df = cq.data.aetf.kline.get(symbols="sz.159919", freq="1m", adj="raw", start_date="2025-01-02")
+etf_adj = cq.data.aetf.kline.get(symbols="sz.159919", adj="adj")
 
 # 2. 查阅代码清单、时间跨度、Schema 映射与物理总行数
 symbols = cq.data.list_symbols("ashare.kline.1d.raw.baostock")
@@ -260,11 +270,28 @@ cqdata import my_factors.csv --table custom.factors.momentum --formats parquet,c
 ```bash
 # 步骤 1: 极速初始化 - 下载并解压通达信官方全量日线行情包 (hsjday.zip)
 cqdata tdx download
-# 或使用 uv 直接运行下载脚本 (也可通过 --tdx-vipdoc 指定本地已有通达信客户端目录)
-uv run scripts/download_tdx.py
+# (也可通过 --vipdoc 指定下载目标路径: cqdata tdx download --vipdoc C:\new_tdx\vipdoc)
 
 # 步骤 2: 日常盘后增量 - 触发通达信在线按水位线追加最新数据 (支持 1d 日线 / 5m / 1m 分钟线)
 cqdata sync -t ashare.kline.1d.raw.tdx
+```
+
+#### 💡 StockDB 本地时序数据库同步实践说明
+
+[StockDB (free-stockdb)](https://github.com/hello245m/free-stockdb) 是一款基于 LevelDB 高性能时序引擎的本地金融数据库，支持 A 股个股与退市股全量覆盖、场内 ETF 独立覆盖、1 分钟超高频行情与全截面基本面多因子。
+
+- **极速探针与连接**：系统内嵌 `stockdb.pyd` 原生 C++ 客户端并具备 `<50ms` TCP 7899 端口状态探针，本地服务启动后即插即用；
+- **A 股与 ETF 物理隔离**：分别维护 `ashare.*` 与 `aetf.*` 独立命名空间与专属复权因子表。
+
+```bash
+# 同步 StockDB A 股日线全截面多因子与 1 分钟线
+cqdata sync -t ashare.kline.1d.raw.stockdb,ashare.kline.1m.raw.stockdb
+
+# 同步 StockDB 场内基金与 ETF 数据及独立复权因子
+cqdata sync -t aetf.kline.1d.raw.stockdb,aetf.kline.1m.raw.stockdb,aetf.adj_factor.stockdb
+
+# 同步 StockDB 同花顺概念与申万行业板块平铺表
+cqdata sync -t ashare.concept.stockdb,ashare.industry.stockdb
 ```
 
 **命令行关键参数：**

@@ -46,20 +46,40 @@ class DefaultConfig:
         self._format = value
 
     def resolve_source(self) -> str:
-        """向上递归解析最终生效的 source"""
+        """向上递归解析最终生效的 source: 自身显式 -> 父级显式 -> 自身 fallback -> 父级 fallback"""
         if self._source is not None:
             return self._source
-        if self.parent is not None:
-            return self.parent.resolve_source()
-        return self.fallback_source or "baostock"
+        curr = self.parent
+        while curr is not None:
+            if curr._source is not None:
+                return curr._source
+            curr = curr.parent
+        if self.fallback_source is not None:
+            return self.fallback_source
+        curr = self.parent
+        while curr is not None:
+            if curr.fallback_source is not None:
+                return curr.fallback_source
+            curr = curr.parent
+        return "baostock"
 
     def resolve_format(self) -> str:
-        """向上递归解析最终生效的 format"""
+        """向上递归解析最终生效的 format: 自身显式 -> 父级显式 -> 自身 fallback -> 父级 fallback"""
         if self._format is not None:
             return self._format
-        if self.parent is not None:
-            return self.parent.resolve_format()
-        return self.fallback_format or "parquet"
+        curr = self.parent
+        while curr is not None:
+            if curr._format is not None:
+                return curr._format
+            curr = curr.parent
+        if self.fallback_format is not None:
+            return self.fallback_format
+        curr = self.parent
+        while curr is not None:
+            if curr.fallback_format is not None:
+                return curr.fallback_format
+            curr = curr.parent
+        return "parquet"
 
     def update_from_dict(self, data: Dict[str, Any]) -> None:
         """根据配置字典批量更新字段"""
@@ -124,6 +144,22 @@ class _BaseTable:
             raise
         except Exception as e:
             raise ValueError(f"Invalid table_id '{table_id}': {e}") from e
+
+    def _resolve_factor_source(
+        self,
+        kline_source: str,
+        factor_prefix: str,
+        fallback_factor_source: str
+    ) -> str:
+        """契约化动态探测：检查当前 K 线源是否提供对应复权因子表，若无则优雅回退至默认因子源"""
+        candidate_table = f"{factor_prefix}.{kline_source}"
+        try:
+            prov = ProviderManager().get_provider(candidate_table)
+            if candidate_table in prov.get_supported_tables():
+                return kline_source
+        except Exception:
+            pass
+        return fallback_factor_source
 
     def _read_table(
         self,
