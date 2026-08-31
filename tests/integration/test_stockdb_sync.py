@@ -11,6 +11,7 @@ StockDB 全链路同步与 SDK 切片集成测试。
 import pytest
 import polars as pl
 from pathlib import Path
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 import cq.data
@@ -34,124 +35,104 @@ def _reset_env(temp_data_dir):
     ProviderManager._providers = {}
 
 
+@contextmanager
+def mock_stockdb_context(mock_rd):
+    """默认全流程 Mock StockDB 模块与网络探针，保证测试与 CI 零外部进程依赖、纯净确定运行"""
+    mock_mod = MagicMock()
+    mock_mod.rd = mock_rd
+    with patch("cq.data.provider.stockdb.provider.stockdb", mock_mod), \
+         patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True):
+        yield
+
+
 class TestStockDBSyncIntegration:
     """StockDB 全流程同步与切片查询集成测试"""
 
     def test_stockdb_kline_1m_sync_and_read(self, temp_data_dir):
         """测试 1m 高频线增量同步与 SDK 切片读取"""
-        is_live = check_stockdb_connection()
-        
-        # 若本地未启动真实服务，使用 mock 保证 CI 100% 稳定运行
-        if not is_live:
-            mock_records = [
-                {"code": "600000", "date": 20250102093000, "open": 10.0, "high": 10.1, "low": 9.9, "close": 10.05, "volume": 1000.0, "amount": 10000.0},
-                {"code": "600000", "date": 20250102093100, "open": 10.05, "high": 10.2, "low": 10.0, "close": 10.15, "volume": 1200.0, "amount": 12100.0},
-            ]
-            mock_rd = MagicMock()
-            mock_rd.get.return_value = {"6": ["600000"]}
-            mock_rd.vals.return_value = mock_records
-            ctx = patch("cq.data.provider.stockdb.provider.stockdb.rd", mock_rd)
-            probe_ctx = patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True)
-            ctx.start()
-            probe_ctx.start()
+        mock_records = [
+            {"code": "600000", "date": 20250102093000, "open": 10.0, "high": 10.1, "low": 9.9, "close": 10.05, "volume": 1000.0, "amount": 10000.0},
+            {"code": "600000", "date": 20250102093100, "open": 10.05, "high": 10.2, "low": 10.0, "close": 10.15, "volume": 1200.0, "amount": 12100.0},
+        ]
+        mock_rd = MagicMock()
+        mock_rd.get.return_value = {"6": ["600000"]}
+        mock_rd.vals.return_value = mock_records
 
-        with patch("cq.data.provider.stockdb.provider.StockDBProvider.get_all_symbols", return_value=["sh.600000"]):
-            try:
-                sm = SyncManager(data_dir=str(temp_data_dir))
-                sm.sync(
-                    table_ids=["ashare.kline.1m.raw.stockdb"],
-                    formats=["parquet"],
-                    start_date="2025-01-02",
-                    end_date="2025-01-02",
-                )
+        with mock_stockdb_context(mock_rd), \
+             patch("cq.data.provider.stockdb.provider.StockDBProvider.get_all_symbols", return_value=["sh.600000"]):
+            sm = SyncManager(data_dir=str(temp_data_dir))
+            sm.sync(
+                table_ids=["ashare.kline.1m.raw.stockdb"],
+                formats=["parquet"],
+                start_date="2025-01-02",
+                end_date="2025-01-02",
+            )
 
-                # 验证物理文件与元数据
-                meta_path = temp_data_dir / "parquet" / "ashare.kline.1m.raw.stockdb" / "metadata.json"
-                assert meta_path.exists()
+            # 验证物理文件与元数据
+            meta_path = temp_data_dir / "parquet" / "ashare.kline.1m.raw.stockdb" / "metadata.json"
+            assert meta_path.exists()
 
-                # 使用 SDK 读取
-                df = read("ashare.kline.1m.raw.stockdb", format="parquet")
-                assert not df.is_empty()
-                assert "symbol" in df.columns
-                assert "datetime" in df.columns
-                assert "timestamp" in df.columns
-                assert "close" in df.columns
-            finally:
-                if not is_live:
-                    ctx.stop()
-                    probe_ctx.stop()
+            # 使用 SDK 读取
+            df = read("ashare.kline.1m.raw.stockdb", format="parquet")
+            assert not df.is_empty()
+            assert "symbol" in df.columns
+            assert "datetime" in df.columns
+            assert "timestamp" in df.columns
+            assert "close" in df.columns
 
     def test_stockdb_aetf_sync_and_dynamic_adjust(self, temp_data_dir):
         """测试场内 ETF 1m 行情与独立复权因子同步及动态后复权读取"""
-        is_live = check_stockdb_connection()
+        mock_kline = [
+            {"code": "159919", "date": 20250102093000, "open": 3.0, "high": 3.1, "low": 2.9, "close": 3.0, "volume": 500.0, "amount": 1500.0}
+        ]
+        mock_cum = [["复权:159919:20240101", 2.0]]
+        mock_rd = MagicMock()
+        mock_rd.get.side_effect = lambda *args: {"1": ["159919"]} if args[0] == "股票代码" else MagicMock(get=lambda k: mock_cum)
+        mock_rd.vals.return_value = mock_kline
 
-        if not is_live:
-            mock_kline = [
-                {"code": "159919", "date": 20250102093000, "open": 3.0, "high": 3.1, "low": 2.9, "close": 3.0, "volume": 500.0, "amount": 1500.0}
-            ]
-            mock_cum = [["复权:159919:20240101", 2.0]]
-            mock_rd = MagicMock()
-            mock_rd.get.side_effect = lambda *args: {"1": ["159919"]} if args[0] == "股票代码" else MagicMock(get=lambda k: mock_cum)
-            mock_rd.vals.return_value = mock_kline
-            ctx = patch("cq.data.provider.stockdb.provider.stockdb.rd", mock_rd)
-            probe_ctx = patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True)
-            ctx.start()
-            probe_ctx.start()
+        with mock_stockdb_context(mock_rd), \
+             patch.object(
+                 cq.data.provider.stockdb.provider.StockDBProvider,
+                 "get_all_symbols",
+                 side_effect=lambda tid: ["sz.159919"] if "kline" in tid else ["_ALL_"]
+             ):
+            sm = SyncManager(data_dir=str(temp_data_dir))
+            # 同步行情
+            sm.sync(
+                table_ids=["aetf.kline.1m.raw.stockdb"],
+                formats=["parquet"],
+                start_date="2025-01-02",
+                end_date="2025-01-02"
+            )
+            # 同步复权因子
+            sm.sync(
+                table_ids=["aetf.adj_factor.stockdb"],
+                formats=["parquet"],
+                start_date="2024-01-01",
+                end_date="2025-01-02"
+            )
 
-        with patch.object(
-            cq.data.provider.stockdb.provider.StockDBProvider,
-            "get_all_symbols",
-            side_effect=lambda tid: ["sz.159919"] if "kline" in tid else ["_ALL_"]
-        ):
-            try:
-                sm = SyncManager(data_dir=str(temp_data_dir))
-                # 同步行情
-                sm.sync(
-                    table_ids=["aetf.kline.1m.raw.stockdb"],
-                    formats=["parquet"],
-                    start_date="2025-01-02",
-                    end_date="2025-01-02"
-                )
-                # 同步复权因子
-                sm.sync(
-                    table_ids=["aetf.adj_factor.stockdb"],
-                    formats=["parquet"],
-                    start_date="2024-01-01",
-                    end_date="2025-01-02"
-                )
+            # 验证物理文件
+            kline_meta = temp_data_dir / "parquet" / "aetf.kline.1m.raw.stockdb" / "metadata.json"
+            factor_meta = temp_data_dir / "parquet" / "aetf.adj_factor.stockdb" / "metadata.json"
+            assert kline_meta.exists()
+            assert factor_meta.exists()
 
-                # 验证物理文件
-                kline_meta = temp_data_dir / "parquet" / "aetf.kline.1m.raw.stockdb" / "metadata.json"
-                factor_meta = temp_data_dir / "parquet" / "aetf.adj_factor.stockdb" / "metadata.json"
-                assert kline_meta.exists()
-                assert factor_meta.exists()
-
-                # 使用 OOP aetf 访问器进行动态后复权读取
-                df_adj = cq.data.aetf.kline.get(freq="1m", adj="adj", format="parquet")
-                assert not df_adj.is_empty()
-                assert "close" in df_adj.columns
-            finally:
-                if not is_live:
-                    ctx.stop()
-                    probe_ctx.stop()
+            # 使用 OOP aetf 访问器进行动态后复权读取
+            df_adj = cq.data.aetf.kline.get(freq="1m", adj="adj", format="parquet")
+            assert not df_adj.is_empty()
+            assert "close" in df_adj.columns
 
     def test_stockdb_concept_and_industry_flat_sync(self, temp_data_dir):
         """测试概念与行业平铺表同步与切片查询"""
-        is_live = check_stockdb_connection()
+        mock_boards = [
+            ["板块:概念_测试概念:BK0001", {"code": "BK0001", "name": "测试概念", "category": "概念", "symbols": ["000001", "600000"]}],
+            ["板块:行业_测试行业:801001", {"code": "801001.SI", "name": "测试行业", "category": "申万一级", "symbols": ["000001"]}],
+        ]
+        mock_rd = MagicMock()
+        mock_rd.get.return_value = MagicMock(do=lambda: mock_boards)
 
-        if not is_live:
-            mock_boards = [
-                ["板块:概念_测试概念:BK0001", {"code": "BK0001", "name": "测试概念", "category": "概念", "symbols": ["000001", "600000"]}],
-                ["板块:行业_测试行业:801001", {"code": "801001.SI", "name": "测试行业", "category": "申万一级", "symbols": ["000001"]}],
-            ]
-            mock_rd = MagicMock()
-            mock_rd.get.return_value = MagicMock(do=lambda: mock_boards)
-            ctx = patch("cq.data.provider.stockdb.provider.stockdb.rd", mock_rd)
-            probe_ctx = patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True)
-            ctx.start()
-            probe_ctx.start()
-
-        try:
+        with mock_stockdb_context(mock_rd):
             sm = SyncManager(data_dir=str(temp_data_dir))
             sm.sync(
                 table_ids=["ashare.concept.stockdb", "ashare.industry.stockdb"],
@@ -177,7 +158,3 @@ class TestStockDBSyncIntegration:
             assert not df_ind.is_empty()
             assert "board_code" in df_ind.columns
             assert "symbol" in df_ind.columns
-        finally:
-            if not is_live:
-                ctx.stop()
-                probe_ctx.stop()
