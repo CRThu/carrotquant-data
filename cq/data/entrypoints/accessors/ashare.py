@@ -7,7 +7,7 @@ A 股个股数据 OOP 访问类与命名空间实现。
 from typing import List, Optional, Union
 import polars as pl
 
-from cq.data.entrypoints.accessors.base import _BaseTable, DefaultConfig
+from cq.data.entrypoints.accessors.base import _BaseTable
 from cq.data.service.data_adjuster import DataAdjuster
 
 
@@ -218,61 +218,17 @@ class AShareInstTrade(_BaseTable):
 class AShare:
     """A 股数据命名空间类"""
 
-    def __init__(self, parent_default: DefaultConfig):
-        self.default = DefaultConfig(parent=parent_default)
-        self.kline = AShareKline(parent_default=self.default)
-        self.adj_factor = AShareAdjFactor(parent_default=self.default)
-        self.concept = AShareConcept(parent_default=self.default)
-        self.industry = AShareIndustry(parent_default=self.default)
-        self.dragon_tiger = AShareDragonTiger(parent_default=self.default)
-        self.inst_trade = AShareInstTrade(parent_default=self.default)
-
-    @property
-    def active_source(self) -> str:
-        """返回当前 A 股市场级最终生效的数据源"""
-        return self.default.resolve_source()
-
-    @property
-    def source(self) -> str:
-        """返回当前 A 股市场级最终生效的数据源"""
-        return self.active_source
-
-    @source.setter
-    def source(self, value: Optional[str]) -> None:
-        """设置当前 A 股市场级默认数据源覆盖值"""
-        self.default.source = value
-
-    @property
-    def active_format(self) -> str:
-        """返回当前 A 股市场级最终生效的存储格式"""
-        return self.default.resolve_format()
-
-    @property
-    def format(self) -> str:
-        """返回当前 A 股市场级最终生效的存储格式"""
-        return self.active_format
-
-    @format.setter
-    def format(self, value: Optional[str]) -> None:
-        """设置当前 A 股市场级默认存储格式覆盖值"""
-        self.default.format = value
-
-    @property
-    def supported_sources(self) -> List[str]:
-        """返回当前 A 股市场下所有表支持的数据源列表 (去重并排序)"""
-        sources = set()
-        for tbl in (self.kline, self.adj_factor, self.concept, self.industry, self.dragon_tiger, self.inst_trade):
-            sources.update(tbl.supported_sources)
-        return sorted(list(sources))
-
-    @property
-    def supported_formats(self) -> List[str]:
-        """返回当前 A 股市场支持的物理存储格式"""
-        return ["parquet", "csv"]
+    def __init__(self):
+        self.kline = AShareKline()
+        self.adj_factor = AShareAdjFactor()
+        self.concept = AShareConcept()
+        self.industry = AShareIndustry()
+        self.dragon_tiger = AShareDragonTiger()
+        self.inst_trade = AShareInstTrade()
 
     def __repr__(self) -> str:
         return (
-            f"<AShare active_source={self.active_source!r}, active_format={self.active_format!r}, "
-            f"tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>"
+            "<AShare tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>"
         )
+
 

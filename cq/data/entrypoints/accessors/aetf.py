@@ -8,7 +8,7 @@ cqdata/entrypoints/accessors/aetf.py
 from typing import List, Optional, Union
 import polars as pl
 
-from cq.data.entrypoints.accessors.base import _BaseTable, DefaultConfig
+from cq.data.entrypoints.accessors.base import _BaseTable
 from cq.data.service.data_adjuster import DataAdjuster
 
 
@@ -140,59 +140,11 @@ class AETFAdjFactor(_BaseTable):
 
 
 class AETF:
-    """场内基金与 ETF 命名空间类"""
+    """场内基金与 ETF 数据命名空间类"""
 
-    def __init__(self, parent_default: DefaultConfig):
-        self.default = DefaultConfig(parent=parent_default, fallback_source="stockdb")
-        self.kline = AETFKline(parent_default=self.default)
-        self.adj_factor = AETFAdjFactor(parent_default=self.default)
-
-    @property
-    def active_source(self) -> str:
-        """返回当前 ETF 市场级最终生效的数据源"""
-        return self.default.resolve_source()
-
-    @property
-    def source(self) -> str:
-        """返回当前 ETF 市场级最终生效的数据源"""
-        return self.active_source
-
-    @source.setter
-    def source(self, value: Optional[str]) -> None:
-        """设置当前 ETF 市场级默认数据源覆盖值"""
-        self.default.source = value
-
-    @property
-    def active_format(self) -> str:
-        """返回当前 ETF 市场级最终生效的存储格式"""
-        return self.default.resolve_format()
-
-    @property
-    def format(self) -> str:
-        """返回当前 ETF 市场级最终生效的存储格式"""
-        return self.active_format
-
-    @format.setter
-    def format(self, value: Optional[str]) -> None:
-        """设置当前 ETF 市场级默认存储格式覆盖值"""
-        self.default.format = value
-
-    @property
-    def supported_sources(self) -> List[str]:
-        """返回当前场内基金与 ETF 市场支持的数据源列表"""
-        sources = set()
-        for tbl in (self.kline, self.adj_factor):
-            sources.update(tbl.supported_sources)
-        return sorted(list(sources))
-
-    @property
-    def supported_formats(self) -> List[str]:
-        """返回当前 ETF 市场支持的物理存储格式"""
-        return ["parquet", "csv"]
+    def __init__(self):
+        self.kline = AETFKline()
+        self.adj_factor = AETFAdjFactor()
 
     def __repr__(self) -> str:
-        return (
-            f"<AETF active_source={self.active_source!r}, active_format={self.active_format!r}, "
-            f"tables=['kline', 'adj_factor']>"
-        )
-
+        return "<AETF tables=['kline', 'adj_factor']>"

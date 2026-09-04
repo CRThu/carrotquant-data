@@ -4,6 +4,7 @@ cqdata/entrypoints/accessors/base.py
 OOP 访问层基础配置与公共基类。
 """
 
+from abc import ABC
 from typing import List, Optional, Union, Dict, Any
 import polars as pl
 
@@ -11,148 +12,57 @@ from cq.data.entrypoints.python_api import read
 from cq.data.provider.provider_manager import ProviderManager
 
 
-class DefaultConfig:
-    """
-    三层链式默认值配置类 (全局 -> 市场级 -> 表级)
-    小覆盖大，新覆盖旧。
-    """
-
-    def __init__(
-        self,
-        parent: Optional["DefaultConfig"] = None,
-        fallback_source: Optional[str] = None,
-        fallback_format: Optional[str] = None
-    ):
-        self._source: Optional[str] = None
-        self._format: Optional[str] = None
-        self.parent: Optional["DefaultConfig"] = parent
-        self.fallback_source: Optional[str] = fallback_source
-        self.fallback_format: Optional[str] = fallback_format
-
-    @property
-    def source(self) -> Optional[str]:
-        return self._source
-
-    @source.setter
-    def source(self, value: Optional[str]):
-        self._source = value
-
-    @property
-    def format(self) -> Optional[str]:
-        return self._format
-
-    @format.setter
-    def format(self, value: Optional[str]):
-        self._format = value
-
-    def resolve_source(self) -> str:
-        """向上递归解析最终生效的 source: 自身显式 -> 父级显式 -> 自身 fallback -> 父级 fallback"""
-        if self._source is not None:
-            return self._source
-        curr = self.parent
-        while curr is not None:
-            if curr._source is not None:
-                return curr._source
-            curr = curr.parent
-        if self.fallback_source is not None:
-            return self.fallback_source
-        curr = self.parent
-        while curr is not None:
-            if curr.fallback_source is not None:
-                return curr.fallback_source
-            curr = curr.parent
-        return "baostock"
-
-    def resolve_format(self) -> str:
-        """向上递归解析最终生效的 format: 自身显式 -> 父级显式 -> 自身 fallback -> 父级 fallback"""
-        if self._format is not None:
-            return self._format
-        curr = self.parent
-        while curr is not None:
-            if curr._format is not None:
-                return curr._format
-            curr = curr.parent
-        if self.fallback_format is not None:
-            return self.fallback_format
-        curr = self.parent
-        while curr is not None:
-            if curr.fallback_format is not None:
-                return curr.fallback_format
-            curr = curr.parent
-        return "parquet"
-
-    @property
-    def active_source(self) -> str:
-        """返回当前层级最终生效的数据源"""
-        return self.resolve_source()
-
-    @property
-    def active_format(self) -> str:
-        """返回当前层级最终生效的存储格式"""
-        return self.resolve_format()
-
-    def update_from_dict(self, data: Dict[str, Any]) -> None:
-        """根据配置字典批量更新字段"""
-        if not isinstance(data, dict):
-            return
-        if "source" in data:
-            self._source = str(data["source"])
-        if "format" in data:
-            self._format = str(data["format"])
-
-    def __repr__(self) -> str:
-        res_src = self.resolve_source()
-        res_fmt = self.resolve_format()
-        return f"<DefaultConfig source={self._source!r} (resolved={res_src!r}), format={self._format!r} (resolved={res_fmt!r})>"
-
-
-# 全局默认配置单例
-default = DefaultConfig(fallback_source="baostock", fallback_format="parquet")
-
-
-class _BaseTable:
+class _BaseTable(ABC):
     """
     表具体访问类基类
-    提取公共 get() 切片逻辑与驱动校验
+    提取公共 get() 切片逻辑、属性控制与驱动校验。
     """
     _PREFIX: str = ""
     _FALLBACK_SOURCE: str = "baostock"
+    _DEFAULT_FORMAT: str = "parquet"
 
-    def __init__(self, parent_default: DefaultConfig):
-        self.default = DefaultConfig(
-            parent=parent_default,
-            fallback_source=self._FALLBACK_SOURCE
-        )
-
-    @property
-    def active_source(self) -> str:
-        """返回当前最终生效的数据源标识符"""
-        return self.default.resolve_source()
+    def __init__(self):
+        self._source: Optional[str] = None
+        self._format: Optional[str] = None
 
     @property
     def source(self) -> str:
-        """返回当前最终生效的数据源标识符"""
-        return self.active_source
+        """返回当前表生效的数据源标识符"""
+        return self._source if self._source is not None else self._FALLBACK_SOURCE
 
     @source.setter
     def source(self, value: Optional[str]) -> None:
-        """设置当前表级数据源覆盖值"""
-        self.default.source = value
-
-    @property
-    def active_format(self) -> str:
-        """返回当前最终生效的存储格式"""
-        return self.default.resolve_format()
+        """设置当前表生效的数据源 (具备严格的合法性校验)"""
+        if value is None:
+            self._source = None
+            return
+        val = str(value).lower().strip()
+        supported = self.supported_sources
+        if val not in supported:
+            raise ValueError(
+                f"Unsupported source '{value}' for {self._PREFIX}. "
+                f"Supported sources: {supported}"
+            )
+        self._source = val
 
     @property
     def format(self) -> str:
-        """返回当前最终生效的存储格式"""
-        return self.active_format
+        """返回当前表生效的存储格式"""
+        return self._format if self._format is not None else self._DEFAULT_FORMAT
 
     @format.setter
     def format(self, value: Optional[str]) -> None:
-        """设置当前表级存储格式覆盖值"""
-        self.default.format = value
+        """设置当前表生效的存储格式"""
+        if value is None:
+            self._format = None
+            return
+        val = str(value).lower().strip()
+        if val not in ("parquet", "csv"):
+            raise ValueError(
+                f"Unsupported format '{value}' for {self._PREFIX}. "
+                f"Supported formats: ['parquet', 'csv']"
+            )
+        self._format = val
 
     @property
     def supported_sources(self) -> List[str]:
@@ -166,10 +76,10 @@ class _BaseTable:
 
     def __repr__(self) -> str:
         return (
-            f"<TableAccessor prefix={self._PREFIX!r} "
-            f"active_source={self.active_source!r} "
-            f"supported_sources={self.supported_sources!r} "
-            f"active_format={self.active_format!r}>"
+            f"<TableAccessor prefix={self._PREFIX!r}, "
+            f"source={self.source!r}, "
+            f"format={self.format!r}, "
+            f"supported_sources={self.supported_sources!r}>"
         )
 
     def _resolve_source_format(
@@ -177,8 +87,8 @@ class _BaseTable:
         source: Optional[str] = None,
         format: Optional[str] = None
     ) -> tuple[str, str]:
-        resolved_source = source if source is not None else self.default.resolve_source()
-        resolved_format = format if format is not None else self.default.resolve_format()
+        resolved_source = source if source is not None else self.source
+        resolved_format = format if format is not None else self.format
         return resolved_source, resolved_format
 
     @staticmethod

@@ -14,8 +14,4 @@ log_dir: "logs"
 # 日志输出级别 (默认: "INFO"，可选: "DEBUG", "INFO", "WARNING", "ERROR")
 log_level: "INFO"
 
-# OOP 访问层默认配置链 (全局默认)
-defaults:
-  source: "baostock"
-  format: "parquet"
 

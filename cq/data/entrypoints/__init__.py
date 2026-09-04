@@ -20,7 +20,6 @@ from cq.data.entrypoints.python_api import (
     list_sources
 )
 from cq.data.entrypoints.accessors import (
-    default,
     ashare,
     aetf,
     aindex
@@ -40,7 +39,6 @@ __all__ = [
     "list_boards",
     "sync",
     "configure",
-    "default",
     "ashare",
     "aetf",
     "aindex"

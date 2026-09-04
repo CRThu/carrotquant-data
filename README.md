@@ -162,11 +162,6 @@ CarrotQuant.Data 秉承 **“显式胜于隐式 (Explicit is better than implici
 data_dir: "data"       # 数据存储根目录
 log_dir: "logs"        # 日志输出目录
 log_level: "INFO"      # 日志级别 (DEBUG/INFO/WARNING/ERROR)
-
-# OOP 访问层全局默认配置链
-defaults:
-  source: "baostock"
-  format: "parquet"
 ```
 
 ---

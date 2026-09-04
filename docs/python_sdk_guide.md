@@ -10,7 +10,7 @@
 
 ### 核心特性
 1. **OOP 便捷访问 (`cq.data.ashare.kline.get()`)**：提供具象化表格类与极致 IDE 自动补全，默认支持 `freq="1d"`, `adj="raw"`。
-2. **三层链式默认继承 (`cq.data.default`)**：支持表级 > 市场级 > 全局级默认配置继承。
+2. **权责自洽与强类型校验**：数据源 (`source`) 严格收敛于具体数据表并具备强类型防呆拦截，存储格式 (`format`) 支持单表定制与市场级批量配置。
 3. **统一切片读取 (`cq.data.read`)**：一个经典底层函数切片读取 K 线时序与板块事件数据，自动智能路由处理分支。
 4. **统一探查 (`cq.data.list_tables` 等)**：开箱即用的本地已持久化数据表、格式、代码列表、时间范围与 Schema 查询。
 5. **原生 Polars 高级性能**：基础返回类型均为 `polars.DataFrame`，原生支持内存投影、快速过滤与链式表达式处理。
@@ -34,10 +34,10 @@ import cq.data
 | | `cq.data.ashare.industry.get()` | 快捷读取行业板块成分股 (支持 EastMoney / StockDB) |
 | | `cq.data.ashare.dragon_tiger.get()` | 快捷读取龙虎榜统计数据 |
 | | `cq.data.ashare.inst_trade.get()` | 快捷读取机构买卖每日统计数据 |
-| **链式默认配置** | `cq.data.default` / `cq.data.ashare.default` / `cq.data.aetf.default` | 三层链式默认值对象 (表级 > 市场级 > 全局) |
-| | `cq.data.ashare.kline.source` (及 `.active_source`) | 探查/修改具体表最终生效的数据源 (如 `cq.data.ashare.kline.source = "tdx"`) |
-| | `cq.data.ashare.source` (及 `.active_source`) | 探查/修改市场命名空间默认数据源 (如 `cq.data.ashare.source = "stockdb"`) |
-| | `cq.data.ashare.kline.supported_sources` | 自省探查具体表或市场支持的所有数据源列表 (如 `['baostock', 'stockdb', 'tdx']`) |
+| **表级配置与自省** | `cq.data.ashare.kline.source` | 探查/设置具体表生效的数据源 (具备强校验，如 `= "tdx"`) |
+| | `cq.data.ashare.kline.format` | 探查/设置具体表生效的存储格式 (如 `= "csv"`) |
+| | `cq.data.ashare.kline.supported_sources` | 自省探查具体表支持的数据源列表 (如 `['baostock', 'stockdb', 'tdx']`) |
+| | `cq.data.ashare.kline.supported_formats` | 自省探查支持的物理存储格式列表 (`['parquet', 'csv']`) |
 | **数据切片与探查** | `cq.data.read()` | 统一切片读取金融数据（自动按 `table_id` 智能路由，支持自定义表） |
 | | `cq.data.write()` | 统一写入/导入数据至本地（支持时序/事件表，自动生成/更新元数据） |
 | | `cq.data.register_provider()` | 注册自定义数据源 Provider 驱动扩展 |
@@ -91,8 +91,8 @@ df = cq.data.ashare.kline.get(
   - `start_date` (`str`, 可选): 起始日期，格式 `"YYYY-MM-DD"` (例如 `"2024-01-01"`)。
   - `end_date` (`str`, 可选): 结束日期，格式 `"YYYY-MM-DD"` (例如 `"2024-06-30"`)。
   - `columns` (`List[str]`, 可选): 选挑投影字段列表 (例如 `["timestamp", "close", "volume"]`)。
-  - `source` (`str`, 可选): 显式指定 K 线数据源 (如 `"stockdb"`, `"baostock"`, `"tdx"`)。若未指定则由 `DefaultConfig` 继承链决定。
-  - `format` (`str`, 可选): K 线存储格式 (如 `"parquet"`, `"csv"`, `"auto"`)。若未指定由 `DefaultConfig` 继承链决定。
+  - `source` (`str`, 可选): 显式指定 K 线数据源 (如 `"stockdb"`, `"baostock"`, `"tdx"`)。若未指定则使用当前表生效配置 (`cq.data.ashare.kline.source`)。
+  - `format` (`str`, 可选): K 线存储格式 (如 `"parquet"`, `"csv"`, `"auto"`)。若未指定则使用当前表生效配置 (`cq.data.ashare.kline.format`)。
 - **返回值 (Returns)**:
   - `pl.DataFrame`: 包含时间戳与 K 线指标的 Polars DataFrame。
 
@@ -182,86 +182,55 @@ df_inst = cq.data.ashare.inst_trade.get(symbols=None, start_date=None, end_date=
 
 ---
 
-#### 3.1.6 `cq.data.default` / `cq.data.ashare.default` / `cq.data.aetf.default` (链式配置与 Fallback 机制)
+#### 3.1.6 访问器属性与自省控制 (Table-Level Source & Format)
 
-三层链式默认值配置对象（专一管理底层物理存储配置与数据源路由）。
+系统严格遵循**单一事实来源（SSOT）**与**权责到表**的设计原则：
+- **数据源 (`source`) 强绑定于具体表**：每张表独立自洽维护自身的数据源与支持列表，严禁通过市场级或全局级强塞通用 source，彻底杜绝跨表污染（例如 TDX 仅支持行情 K 线，绝不允许污染概念板块表）；
+- **存储格式 (`format`) 严格收敛于具体表**：每张表独立自洽维护自身持久化存储格式（默认 `"parquet"`），支持独立切换，表与表之间绝对物理隔离；
+- **防呆强类型校验**：赋值不支持的 `source` 或非法 `format` 时，立即抛出 `ValueError` 显式拦截，坚决杜绝运行期隐式错乱。
 
-```python
-cq.data.default.source = "tdx"                      # 1. 全局默认数据源
-cq.data.ashare.default.source = "baostock"           # 2. A 股市场级默认数据源
-cq.data.aetf.default.source = "stockdb"             # 3. 场内基金市场级默认数据源
-cq.data.ashare.kline.default.format = "parquet"     # 4. 表级默认存储格式
-```
+##### 1. 各访问器内置默认值对照表
 
-##### 1. 各访问器内置 Fallback 默认值对照表
+| 访问器路径 | 说明 | 类别 | 默认数据源 (`source`) | 支持的数据源 (`supported_sources`) | 默认格式 (`format`) |
+| :--- | :--- | :---: | :---: | :--- | :---: |
+| `cq.data.ashare.kline` | A 股个股 K 线 | TS | `"baostock"` | `['baostock', 'stockdb', 'tdx']` | `"parquet"` |
+| `cq.data.ashare.adj_factor` | A 股个股后复权因子 | EV | `"baostock"` | `['baostock', 'stockdb']` | `"parquet"` |
+| `cq.data.ashare.concept` | 概念板块成分股 | EV | `"eastmoney"` | `['eastmoney', 'stockdb']` | `"parquet"` |
+| `cq.data.ashare.industry` | 行业板块成分股 | EV | `"eastmoney"` | `['eastmoney', 'stockdb']` | `"parquet"` |
+| `cq.data.ashare.dragon_tiger` | 龙虎榜每日统计 | EV | `"eastmoney"` | `['eastmoney']` | `"parquet"` |
+| `cq.data.ashare.inst_trade` | 机构席位交易统计 | EV | `"eastmoney"` | `['eastmoney']` | `"parquet"` |
+| `cq.data.aetf.kline` | 场内基金与 ETF K 线 | TS | `"stockdb"` | `['stockdb']` | `"parquet"` |
+| `cq.data.aetf.adj_factor` | 场内基金独立复权因子 | EV | `"stockdb"` | `['stockdb']` | `"parquet"` |
+| `cq.data.aindex.kline` | 大盘指数 K 线 | TS | `"baostock"` | `['baostock', 'tdx']` | `"parquet"` |
 
-当用户未做任何手动配置时，系统自动按各资产分类的专属兜底策略（Fallback）解析：
-
-| 访问器路径 | 类别 | 默认数据源 (`fallback_source`) | 默认存储格式 (`fallback_format`) | 说明 |
-| :--- | :---: | :---: | :---: | :--- |
-| `cq.data.ashare.kline` | TS | `"baostock"` | `"parquet"` | A 股个股 K 线 |
-| `cq.data.ashare.adj_factor` | EV | `"baostock"` | `"parquet"` | A 股个股后复权因子 |
-| `cq.data.ashare.concept` | EV | `"eastmoney"` | `"parquet"` | 概念板块成分股 |
-| `cq.data.ashare.industry` | EV | `"eastmoney"` | `"parquet"` | 行业板块成分股 |
-| `cq.data.ashare.dragon_tiger` | EV | `"eastmoney"` | `"parquet"` | 龙虎榜每日统计 |
-| `cq.data.ashare.inst_trade` | EV | `"eastmoney"` | `"parquet"` | 机构席位交易统计 |
-| `cq.data.aetf.kline` | TS | `"stockdb"` | `"parquet"` | 场内基金与 ETF K 线 |
-| `cq.data.aetf.adj_factor` | EV | `"stockdb"` | `"parquet"` | 场内基金独立复权因子 |
-| `cq.data.aindex.kline` | TS | `"baostock"` | `"parquet"` | 大盘指数 K 线 |
-| `cq.data.default` (全局) | 全局 | `"baostock"` | `"parquet"` | 全局顶层兜底 |
-
-##### 2. 5 级配置解析优先级（从高到低）
-
-`resolve_source()` 与 `resolve_format()` 严格遵循以下优先级判定顺序（由高到低，先命中即生效）：
-
-| 优先级 | 层级 | 配置方式 / 示例 | 说明 |
-| :---: | :--- | :--- | :--- |
-| **1** | **方法参数显式指定** | `kline.get(source="tdx", format="csv")` | 最高优先级，仅对当前单次调用生效 |
-| **2** | **表级显式覆盖** | `cq.data.ashare.kline.default.source = "..."` | 用户主动设置，覆盖市场级与全局级 |
-| **3** | **市场级显式覆盖** | `cq.data.ashare.default.source = "..."` | 用户主动设置，作用于整个资产大类 |
-| **4** | **全局级显式覆盖** | `cq.data.default.source = "..."` / YAML 配置 | 用户主动设置，全局生效 |
-| **5** | **自身专属 Fallback** | `cq.data.aetf` 默认兜底为 `"stockdb"` | 系统开箱即用的资产分类内置默认值 |
-| **6** | **系统全局 Fallback** | 终极兜底为 `"baostock"` / `"parquet"` | 系统级兜底保障 |
-
-##### 3. 动态后复权因子表探测与自动回退策略
-
-当调用 `kline.get(adj="adj")` 执行动态后复权时，系统通过 `ProviderManager` 契约动态探查复权因子：
-- **同源绑定**：若当前 K 线数据源自带因子表（如 `baostock`、`stockdb`），自动无缝绑定其同源复权因子；
-- **优雅回退**：若当前 K 线数据源为纯行情源（如 `tdx`），自动回退至权威因子源（`baostock`），无需用户手动切换。
-
-##### 4. 访问器属性与自省能力 (Self-inspection & Convenience Properties)
-
-为了让开发者无需查阅文档即可在 Python REPL、Jupyter Notebook 或代码中快速探查、切换当前生效配置与支持的数据源，所有表访问器（如 `cq.data.ashare.kline`）与市场命名空间（如 `cq.data.ashare`）均原生提供以下自省属性：
+##### 2. 表级属性查询、修改与防呆校验示例
 
 ```python
-# 1. 探查当前表最终生效的数据源与格式 (由继承链动态解析)
-print(cq.data.ashare.kline.active_source)    # 'baostock'
-print(cq.data.ashare.kline.active_format)    # 'parquet'
-
-# 2. 直接读取/修改当前表生效的数据源 (读返回 active_source，写等价于修改 default.source)
-print(cq.data.ashare.kline.source)           # 'baostock'
-cq.data.ashare.kline.source = "tdx"          # 快速切换当前表数据源为通达信
-cq.data.ashare.kline.format = "csv"          # 快速切换存储格式为 csv
-cq.data.ashare.kline.source = None           # 恢复继承父级/Fallback
-
-# 3. 市场级全局快捷设置 (作用于整个 A 股命名空间)
-cq.data.ashare.source = "stockdb"            # 设置 A 股市场默认数据源
-print(cq.data.ashare.active_source)          # 'stockdb'
-cq.data.ashare.source = None                 # 恢复
-
-# 4. 自省当前表/市场支持的所有数据源与存储格式
+# 1. 探查表级当前生效的数据源、存储格式与支持列表
+print(cq.data.ashare.kline.source)            # 'baostock'
+print(cq.data.ashare.kline.format)            # 'parquet'
 print(cq.data.ashare.kline.supported_sources) # ['baostock', 'stockdb', 'tdx']
-print(cq.data.ashare.concept.supported_sources) # ['eastmoney', 'stockdb']
-print(cq.data.ashare.supported_sources)       # ['baostock', 'eastmoney', 'stockdb', 'tdx']
-print(cq.data.aetf.supported_sources)         # ['stockdb']
 print(cq.data.ashare.kline.supported_formats) # ['parquet', 'csv']
+
+# 2. 修改表级数据源与格式 (仅对当前表生效，绝对物理隔离)
+cq.data.ashare.kline.source = "tdx"           # 切换 A 股 K 线为通达信
+cq.data.ashare.kline.format = "csv"           # 切换存储格式为 csv
+cq.data.ashare.concept.format                 # 概念板块仍保持独立的 'parquet'
+
+# 3. 恢复默认设置
+cq.data.ashare.kline.source = None            # 恢复内置默认源 ('baostock')
+cq.data.ashare.kline.format = None            # 恢复内置默认格式 ('parquet')
+
+# 4. 防呆强类型校验拦截 (如果给板块表赋不支持的 tdx，立即抛错)
+cq.data.ashare.concept.source = "tdx"
+# => 抛出 ValueError: Unsupported source 'tdx' for ashare.concept. Supported sources: ['eastmoney', 'stockdb']
 
 # 5. REPL / Jupyter 友好自解释输出 (__repr__)
 cq.data.ashare.kline
-# => <AShareKline prefix='ashare.kline', active_source='baostock', active_format='parquet', supported_sources=['baostock', 'stockdb', 'tdx'], supported_formats=['parquet', 'csv']>
+# => <TableAccessor prefix='ashare.kline', source='baostock', format='parquet', supported_sources=['baostock', 'stockdb', 'tdx']>
 
 cq.data.ashare
-# => <AShare active_source='baostock', active_format='parquet', tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>
+# => <AShare tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>
 ```
 
 ---
@@ -518,10 +487,6 @@ cq.data.configure("./config.yaml")
   data_dir: "data"       # 数据存储根路径
   log_dir: "logs"        # 日志输出目录
   log_level: "INFO"      # 日志输出级别
-
-  defaults:              # OOP 访问层全局默认值
-    source: "baostock"
-    format: "parquet"
   ```
 
 - **参数说明 (Args)**:

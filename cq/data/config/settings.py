@@ -27,7 +27,6 @@ class Settings:
         self.data_dir: str = "data"
         self.log_dir: str = "logs"
         self.log_level: str = "INFO"
-        self.defaults: Dict[str, Any] = {}
 
         # 初始化时自动加载配置
         self._load_initial_config()
@@ -88,12 +87,6 @@ class Settings:
             if "log_level" in config_data:
                 self.log_level = str(config_data["log_level"]).upper()
 
-            if "defaults" in config_data and isinstance(config_data["defaults"], dict):
-                self.defaults = config_data["defaults"]
-                self._update_accessor_defaults()
-
-        return self
-
     def configure(self, config_path: Union[str, Path]) -> "Settings":
         """
         从指定 YAML 配置文件加载全局参数。
@@ -112,14 +105,6 @@ class Settings:
         except Exception:
             pass
 
-
-    def _update_accessor_defaults(self) -> None:
-        """更新全局 accessor defaults 链"""
-        try:
-            from cq.data.entrypoints.accessors import default
-            default.update_from_dict(self.defaults)
-        except (ImportError, AttributeError):
-            pass
 
 
 # 全局 Settings 单例实例

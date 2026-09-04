@@ -1,7 +1,7 @@
 """
 tests/unit/test_accessors.py
 
-单元测试：OOP 便捷访问层、DefaultConfig 链式继承与校验
+单元测试：OOP 便捷访问层、表级数据源隔离、存储格式配置与强类型防呆校验
 """
 
 import pytest
@@ -9,42 +9,43 @@ from unittest.mock import patch, MagicMock
 import polars as pl
 
 import cq.data
-from cq.data.entrypoints.accessors.base import DefaultConfig
+def test_table_accessor_source_and_format_isolation_and_validation():
+    """测试表级访问器 source 与 format 的绝对物理隔离与强校验拦截"""
+    kline = cq.data.ashare.kline
+    concept = cq.data.ashare.concept
 
+    # 1. 默认值自洽解析
+    assert kline.source == "baostock"
+    assert concept.source == "eastmoney"
+    assert kline.format == "parquet"
 
-def test_default_config_chain():
-    """测试 DefaultConfig 三层继承链 (全局 -> 市场 -> 表) 对 source, format 的支持"""
-    global_def = DefaultConfig(fallback_source="baostock", fallback_format="parquet")
-    market_def = DefaultConfig(parent=global_def)
-    table_def = DefaultConfig(parent=market_def)
+    # 2. 修改 kline source，concept 完全不受影响 (绝对隔离)
+    try:
+        kline.source = "tdx"
+        assert kline.source == "tdx"
+        assert concept.source == "eastmoney"
 
-    # 1. 默认探查：回退到 fallback
-    assert table_def.resolve_source() == "baostock"
-    assert table_def.resolve_format() == "parquet"
+        # 3. 强校验：试图给 concept 赋不支持的 tdx 立即抛出 ValueError
+        with pytest.raises(ValueError, match="Unsupported source 'tdx' for ashare.concept"):
+            concept.source = "tdx"
 
-    # 2. 全局设置
-    global_def.source = "eastmoney"
-    global_def.format = "csv"
-    assert table_def.resolve_source() == "eastmoney"
-    assert table_def.resolve_format() == "csv"
+        # 4. 强校验：试图给 kline 赋非法 source 立即拦截
+        with pytest.raises(ValueError, match="Unsupported source 'invalid' for ashare.kline"):
+            kline.source = "invalid"
 
-    # 3. 市场级覆盖全局 (小覆盖大)
-    market_def.source = "tdx"
-    market_def.format = "parquet"
-    assert table_def.resolve_source() == "tdx"
-    assert table_def.resolve_format() == "parquet"
+        # 5. format 强校验
+        with pytest.raises(ValueError, match="Unsupported format 'json'"):
+            kline.format = "json"
 
-    # 4. 表级覆盖市场级
-    table_def.source = "baostock"
-    table_def.format = "csv"
-    assert table_def.resolve_source() == "baostock"
-    assert table_def.resolve_format() == "csv"
+        # 6. format 正常切换
+        kline.format = "csv"
+        assert kline.format == "csv"
+    finally:
+        kline.source = None
+        kline.format = None
+        assert kline.source == "baostock"
+        assert kline.format == "parquet"
 
-    # 5. 重置表级，恢复继承
-    table_def.source = None
-    table_def.format = None
-    assert table_def.resolve_source() == "tdx"
-    assert table_def.resolve_format() == "parquet"
 
 
 def test_accessor_default_args(mock_baostock, temp_data_dir):
@@ -163,17 +164,17 @@ def test_unsupported_table_id_error():
 
 
 def test_configure_from_yaml(tmp_path):
-    """测试 cq.data.configure 指定配置文件路径加载"""
+    """测试 cq.data.configure 指定配置文件路径加载并更新存储根目录"""
     custom_yaml = tmp_path / "custom_config.yaml"
-    custom_yaml.write_text("data_dir: '/custom/storage'\ndefaults:\n  source: 'tdx'\n", encoding="utf-8")
+    custom_yaml.write_text("data_dir: '/custom/storage'\n", encoding="utf-8")
 
     settings = cq.data.configure(custom_yaml)
     assert settings.data_dir == "/custom/storage"
-    assert cq.data.default.resolve_source() == "tdx"
 
     # 恢复默认设置
     cq.data.settings.data_dir = "data"
-    cq.data.default.source = None
+
+
 
 
 def test_accessor_adj_prefers_static_table_when_available(mock_baostock):
@@ -285,7 +286,7 @@ def test_accessor_adj_missing_factor_raises_error(mock_baostock):
 
 
 def test_accessor_source_and_format_properties():
-    """测试表级与市场级 active_source, source, active_format, format 及 supported_sources 自省能力"""
+    """测试表级 source / format 权责自洽与市场级 format / supported_sources 自省能力"""
     # 1. 全局数据源列表查询
     sources = cq.data.list_sources()
     assert "baostock" in sources
@@ -293,11 +294,11 @@ def test_accessor_source_and_format_properties():
     assert "tdx" in sources
     assert "stockdb" in sources
 
-    # 2. 表级 active_source 与 source 读取
-    assert cq.data.ashare.kline.active_source == "baostock"
+    # 2. 表级 source 与 format 读取
     assert cq.data.ashare.kline.source == "baostock"
-    assert cq.data.aetf.kline.active_source == "stockdb"
+    assert cq.data.ashare.kline.format == "parquet"
     assert cq.data.aetf.kline.source == "stockdb"
+    assert cq.data.aetf.kline.format == "parquet"
 
     # 3. 表级 supported_sources 自省
     ashare_kline_sources = cq.data.ashare.kline.supported_sources
@@ -315,49 +316,46 @@ def test_accessor_source_and_format_properties():
     # 4. 表级 supported_formats
     assert cq.data.ashare.kline.supported_formats == ["parquet", "csv"]
 
-    # 5. 动态修改表级 source 并在 get 中生效
+    # 5. 动态修改表级 source 并在 repr 中呈现
     try:
         cq.data.ashare.kline.source = "tdx"
-        assert cq.data.ashare.kline.active_source == "tdx"
         assert cq.data.ashare.kline.source == "tdx"
 
         # 验证 repr
         rep = repr(cq.data.ashare.kline)
         assert "ashare.kline" in rep
-        assert "active_source='tdx'" in rep
+        assert "source='tdx'" in rep
     finally:
         # 恢复默认
         cq.data.ashare.kline.source = None
+        assert cq.data.ashare.kline.source == "baostock"
 
-    # 6. 市场级 source 读写验证
+    # 6. 验证市场级绝无 source 属性 (彻底杜绝跨层污染)
+    assert not hasattr(cq.data.ashare, "source")
+    assert not hasattr(cq.data.aetf, "source")
+    assert not hasattr(cq.data.aindex, "source")
+
+    # 7. 表级 format 独立切换与物理隔离
     try:
-        cq.data.ashare.source = "stockdb"
-        assert cq.data.ashare.active_source == "stockdb"
-        assert cq.data.ashare.source == "stockdb"
-        # 表级继承市场级
-        assert cq.data.ashare.kline.active_source == "stockdb"
+        cq.data.ashare.kline.format = "csv"
+        assert cq.data.ashare.kline.format == "csv"
+        assert cq.data.ashare.concept.format == "parquet"  # 互不干扰
     finally:
-        cq.data.ashare.source = None
+        cq.data.ashare.kline.format = None
+        assert cq.data.ashare.kline.format == "parquet"
 
-    # 7. DefaultConfig 级 active_source 与 active_format
-    assert cq.data.default.active_source == "baostock"
-    assert cq.data.default.active_format == "parquet"
-
-    # 8. 市场级 supported_sources 与 supported_formats
-    ashare_all_sources = cq.data.ashare.supported_sources
-    assert "baostock" in ashare_all_sources
-    assert "eastmoney" in ashare_all_sources
-    assert "tdx" in ashare_all_sources
-    assert "stockdb" in ashare_all_sources
-    assert cq.data.ashare.supported_formats == ["parquet", "csv"]
-
-    assert cq.data.aetf.supported_sources == ["stockdb"]
-    assert cq.data.aindex.supported_sources == ["baostock", "tdx"]
+    # 8. 市场级 100% 纯净化命名空间：绝不暴露 source / format / supported_* 状态属性
+    for mkt in (cq.data.ashare, cq.data.aetf, cq.data.aindex):
+        assert not hasattr(mkt, "source")
+        assert not hasattr(mkt, "supported_sources")
+        assert not hasattr(mkt, "format")
+        assert not hasattr(mkt, "supported_formats")
 
     # 9. 市场级 repr 验证
     assert "<AShare" in repr(cq.data.ashare)
     assert "<AETF" in repr(cq.data.aetf)
     assert "<AIndex" in repr(cq.data.aindex)
+
 
 
 
