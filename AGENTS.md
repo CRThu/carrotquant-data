@@ -150,10 +150,10 @@ SyncManager.sync()
 
 ### 4.1 接入层与配置 (Gateway & Config)
 - **`config/settings.py`**: 全局 `Settings` 配置管理，支持自动加载本地 `.env` 环境变量、通过 `cq.data.configure()` 加载 YAML 配置，或使用环境变量 `CQDATA_DATA_DIR` 和 `CQDATA_CONFIG_PATH`。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)，`.env` 模板见 [.env.sample](file:///d:/Quant/carrotquant-data/.env.sample)。
-- **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aetf.kline`, `aindex.kline` 等）与 `DefaultConfig` 三层链式继承解析器（支持 `source`, `format`），默认 `raw` 极速零开销直读原始行情，显式 `adj="adj"` 时调用 `DataAdjuster` 动态后复权折算。
-- **`python_api.py`**: 提供 SDK 高阶 API (`read`, `write`, `register_provider` 双模注册器/类装饰器, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 与动态 Provider 路由为基础，原生支持内置表与自定义外部表。
-- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
-- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/tables` 探查与 `GET /api/v1/query` 统一切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
+- **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aetf.kline`, `aindex.kline` 等）与 `DefaultConfig` 三层链式继承解析器（支持 `source`, `format`），提供表级与市场级自省属性（`active_source`, `source`, `active_format`, `format`, `supported_sources`, `supported_formats`），默认 `raw` 极速零开销直读原始行情；显式 `adj="adj"` 时优先直读静态复权表，若无则平滑降级为 `raw + adj_factor` 动态后复权折算（因子缺失时严格抛错中断）。
+- **`python_api.py`**: 提供 SDK 高阶 API (`read`, `write`, `register_provider` 双模注册器/类装饰器, `list_sources`, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 与动态 Provider 路由为基础，原生支持内置表与自定义外部表。
+- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata sources`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
+- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/sources` 数据源清单探查、`GET /api/v1/tables` 表元数据探查与 `GET /api/v1/query` 统一切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
 
 
 ### 4.2 业务服务层 (Service)

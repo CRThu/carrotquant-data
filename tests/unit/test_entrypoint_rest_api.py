@@ -298,3 +298,15 @@ def test_log_broadcaster_and_stream():
 
     resp_fs = client.get("/api/v1/filesystem/list")
     assert resp_fs.status_code == 200
+
+
+def test_list_sources():
+    """测试 GET /api/v1/sources 端点"""
+    with patch("cq.data.entrypoints.rest_api.list_sources", return_value=["baostock", "eastmoney", "tdx", "stockdb"]):
+        response = client.get("/api/v1/sources")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 4
+        assert [item["source"] for item in data["sources"]] == ["baostock", "eastmoney", "tdx", "stockdb"]
+
+

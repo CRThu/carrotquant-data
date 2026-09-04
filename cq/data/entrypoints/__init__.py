@@ -16,7 +16,8 @@ from cq.data.entrypoints.python_api import (
     get_row_count,
     list_boards,
     sync,
-    configure
+    configure,
+    list_sources
 )
 from cq.data.entrypoints.accessors import (
     default,
@@ -29,6 +30,7 @@ __all__ = [
     "read",
     "write",
     "register_provider",
+    "list_sources",
     "list_tables",
     "list_formats",
     "list_symbols",

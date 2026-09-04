@@ -20,7 +20,8 @@ from cq.data.entrypoints.python_api import (
     list_symbols,
     get_time_range,
     get_schema,
-    get_row_count
+    get_row_count,
+    list_sources
 )
 
 from cq.data.provider.tdx_downloader import download_and_extract as tdx_download_and_extract
@@ -143,6 +144,31 @@ def tables_cmd(
         for t in event_tables:
             typer.echo(f"  - {t}")
     typer.echo("==========================================================")
+
+
+@app.command(name="sources")
+def sources_cmd():
+    """
+    列出系统当前所有已注册/可用数据源驱动及其支持的数据表
+    """
+    from cq.data.provider.provider_manager import ProviderManager
+
+    pm = ProviderManager()
+    sources = list_sources()
+
+    typer.echo("==================== 系统可用数据源 ====================")
+    for src in sources:
+        try:
+            prov = pm._providers.get(src) or pm.get_provider(f"probe.{src}")
+            supported_tables = prov.get_supported_tables()
+        except Exception:
+            supported_tables = []
+        typer.echo(f"【数据源: {src}】(支持 {len(supported_tables)} 张表):")
+        for t in supported_tables:
+            typer.echo(f"  - {t}")
+        typer.echo("")
+    typer.echo("==========================================================")
+
 
 
 @app.command(name="info")

@@ -35,9 +35,13 @@ import cq.data
 | | `cq.data.ashare.dragon_tiger.get()` | 快捷读取龙虎榜统计数据 |
 | | `cq.data.ashare.inst_trade.get()` | 快捷读取机构买卖每日统计数据 |
 | **链式默认配置** | `cq.data.default` / `cq.data.ashare.default` / `cq.data.aetf.default` | 三层链式默认值对象 (表级 > 市场级 > 全局) |
+| | `cq.data.ashare.kline.source` (及 `.active_source`) | 探查/修改具体表最终生效的数据源 (如 `cq.data.ashare.kline.source = "tdx"`) |
+| | `cq.data.ashare.source` (及 `.active_source`) | 探查/修改市场命名空间默认数据源 (如 `cq.data.ashare.source = "stockdb"`) |
+| | `cq.data.ashare.kline.supported_sources` | 自省探查具体表或市场支持的所有数据源列表 (如 `['baostock', 'stockdb', 'tdx']`) |
 | **数据切片与探查** | `cq.data.read()` | 统一切片读取金融数据（自动按 `table_id` 智能路由，支持自定义表） |
 | | `cq.data.write()` | 统一写入/导入数据至本地（支持时序/事件表，自动生成/更新元数据） |
 | | `cq.data.register_provider()` | 注册自定义数据源 Provider 驱动扩展 |
+| | `cq.data.list_sources()` | 列出系统当前已注册/支持的所有数据源驱动名称清单 |
 | | `cq.data.list_tables()` | 列出本地所有已存在的数据表及其 `category` 分类 |
 | | `cq.data.list_formats()` | 查询某数据表在本地已有的存储格式 (`parquet`, `csv`) |
 | | `cq.data.list_symbols()` | 查询某数据表在本地已存储的代码列表 |
@@ -79,7 +83,10 @@ df = cq.data.ashare.kline.get(
   - `freq` (`str`, 可选): K 线频率，默认 `"1d"`。支持 `"1d"` (日线), `"5m"` (5分钟线), `"1m"` (1分钟线)。
   - `adj` (`str`, 可选): 复权方式，默认 `"raw"` (不复权)。支持 `"raw"` (不复权) 与 `"adj"` (后复权)。
     - **默认 `"raw"` (零开销纯净直读)**：不产生任何因子表 IO 与内存 Join，以最快速度直读原始行情；
-    - **显式 `"adj"` (动态后复权引擎)**：自动读取底层原始 K 线与权威复权因子表，按 `[symbol, date]` 向量化折算 `open`, `high`, `low`, `close` 价格列，具备完备的停牌保护、高频分钟线跨频对齐与历史短切片前向继承。
+    - **显式 `"adj"` (双层优先级解析与严格防御)**：
+      1. *第一优先级（静态表直读）*：优先尝试直读已同步的物理静态复权表（如 `ashare.kline.1d.adj.baostock`），若存在且非空则 0 因子 IO、0 内存 Join 极速返回；
+      2. *第二优先级（动态向量化折算）*：若无静态表或本地未同步，自动降级为读取底层 raw K 线与同源/权威复权因子表，按 `[symbol, date]` 向量化折算 `open`, `high`, `low`, `close` 价格列，具备完备的停牌保护、高频分钟线跨频对齐与历史短切片前向继承；
+      3. *严格异常防御*：若本地未同步复权因子表，**立即抛出 `FileNotFoundError` 强类型异常明确中断**，坚决杜绝隐式静默假复权（用不复权价格假冒复权价格）。
   - `symbols` (`str` 或 `List[str]`, 可选): 代码或代码列表 (例如 `"sh.600000"` 或 `["sh.600000", "sz.000001"]`)。为 `None` 时读取该表全量代码。
   - `start_date` (`str`, 可选): 起始日期，格式 `"YYYY-MM-DD"` (例如 `"2024-01-01"`)。
   - `end_date` (`str`, 可选): 结束日期，格式 `"YYYY-MM-DD"` (例如 `"2024-06-30"`)。
@@ -222,6 +229,41 @@ cq.data.ashare.kline.default.format = "parquet"     # 4. 表级默认存储格�
 - **同源绑定**：若当前 K 线数据源自带因子表（如 `baostock`、`stockdb`），自动无缝绑定其同源复权因子；
 - **优雅回退**：若当前 K 线数据源为纯行情源（如 `tdx`），自动回退至权威因子源（`baostock`），无需用户手动切换。
 
+##### 4. 访问器属性与自省能力 (Self-inspection & Convenience Properties)
+
+为了让开发者无需查阅文档即可在 Python REPL、Jupyter Notebook 或代码中快速探查、切换当前生效配置与支持的数据源，所有表访问器（如 `cq.data.ashare.kline`）与市场命名空间（如 `cq.data.ashare`）均原生提供以下自省属性：
+
+```python
+# 1. 探查当前表最终生效的数据源与格式 (由继承链动态解析)
+print(cq.data.ashare.kline.active_source)    # 'baostock'
+print(cq.data.ashare.kline.active_format)    # 'parquet'
+
+# 2. 直接读取/修改当前表生效的数据源 (读返回 active_source，写等价于修改 default.source)
+print(cq.data.ashare.kline.source)           # 'baostock'
+cq.data.ashare.kline.source = "tdx"          # 快速切换当前表数据源为通达信
+cq.data.ashare.kline.format = "csv"          # 快速切换存储格式为 csv
+cq.data.ashare.kline.source = None           # 恢复继承父级/Fallback
+
+# 3. 市场级全局快捷设置 (作用于整个 A 股命名空间)
+cq.data.ashare.source = "stockdb"            # 设置 A 股市场默认数据源
+print(cq.data.ashare.active_source)          # 'stockdb'
+cq.data.ashare.source = None                 # 恢复
+
+# 4. 自省当前表/市场支持的所有数据源与存储格式
+print(cq.data.ashare.kline.supported_sources) # ['baostock', 'stockdb', 'tdx']
+print(cq.data.ashare.concept.supported_sources) # ['eastmoney', 'stockdb']
+print(cq.data.ashare.supported_sources)       # ['baostock', 'eastmoney', 'stockdb', 'tdx']
+print(cq.data.aetf.supported_sources)         # ['stockdb']
+print(cq.data.ashare.kline.supported_formats) # ['parquet', 'csv']
+
+# 5. REPL / Jupyter 友好自解释输出 (__repr__)
+cq.data.ashare.kline
+# => <AShareKline prefix='ashare.kline', active_source='baostock', active_format='parquet', supported_sources=['baostock', 'stockdb', 'tdx'], supported_formats=['parquet', 'csv']>
+
+cq.data.ashare
+# => <AShare active_source='baostock', active_format='parquet', tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>
+```
+
 ---
 
 ### 3.2 统一切片读取与元数据探查 API
@@ -321,7 +363,21 @@ cq.data.register_provider("my_source", MyCustomProvider(api_key="xxx"))
 
 ---
 
-#### 3.2.4 `cq.data.list_tables()`
+#### 3.2.4 `cq.data.list_sources()`
+
+获取系统当前已加载/注册的所有可用数据源驱动标识列表（包含内置数据源 `'baostock'`, `'eastmoney'`, `'tdx'`, `'stockdb'` 与外部动态注册的自定义数据源）。
+
+```python
+sources = cq.data.list_sources()
+print(sources)  # ['baostock', 'eastmoney', 'tdx', 'stockdb']
+```
+
+- **返回值 (Returns)**:
+  - `List[str]`: 数据源标识名称列表。
+
+---
+
+#### 3.2.5 `cq.data.list_tables()`
 
 列出本地物理存储中已存在的全量数据表及其分类信息。
 

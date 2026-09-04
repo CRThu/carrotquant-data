@@ -116,10 +116,12 @@ def test_accessor_dynamic_adj_dual_chain(mock_baostock, temp_data_dir):
     })
 
     def mock_read_side_effect(table_id, symbols=None, start_date=None, end_date=None, columns=None, format="auto"):
-        if "kline" in table_id:
+        if ".raw." in table_id:
             return raw_df
         elif "adj_factor" in table_id:
             return factor_df
+        elif ".adj." in table_id:
+            raise FileNotFoundError(f"Static table {table_id} not found")
         return pl.DataFrame()
 
     with patch("cq.data.entrypoints.accessors.base.read", side_effect=mock_read_side_effect) as mock_read:
@@ -172,7 +174,30 @@ def test_configure_from_yaml(tmp_path):
     # 恢复默认设置
     cq.data.settings.data_dir = "data"
     cq.data.default.source = None
-    cq.data.default.adj = None
+
+
+def test_accessor_adj_prefers_static_table_when_available(mock_baostock):
+    """测试当本地存在物理静态 adj 表时，优先 0 Join 直接读取该表"""
+    static_df = pl.DataFrame({
+        "symbol": ["sh.600000"],
+        "datetime": ["2024-06-01T15:00:00.000+08:00"],
+        "timestamp": [1717225200000],
+        "open": [15.0],
+        "close": [15.75],
+    })
+
+    with patch("cq.data.entrypoints.accessors.base.read", return_value=static_df) as mock_read:
+        df = cq.data.ashare.kline.get(symbols="sh.600000", adj="adj", source="baostock")
+        assert df["close"].to_list() == [15.75]
+        # 验证仅直读了一次静态 adj 表，未去读 factor 表
+        mock_read.assert_called_once_with(
+            table_id="ashare.kline.1d.adj.baostock",
+            symbols="sh.600000",
+            start_date=None,
+            end_date=None,
+            columns=None,
+            format="parquet"
+        )
 
 
 def test_aetf_accessor(mock_baostock, temp_data_dir):
@@ -233,3 +258,106 @@ def test_aetf_accessor(mock_baostock, temp_data_dir):
             columns=None,
             format="parquet"
         )
+
+
+def test_accessor_adj_missing_factor_raises_error(mock_baostock):
+    """测试当请求 adj='adj' 时，若本地无静态 adj 表且无因子表，直接显式抛出异常，绝不隐式假复权"""
+    raw_df = pl.DataFrame({
+        "symbol": ["sh.600000"],
+        "datetime": ["2024-06-01T15:00:00.000+08:00"],
+        "timestamp": [1717225200000],
+        "open": [10.0],
+        "close": [10.5],
+    })
+
+    def mock_read_missing_factor(table_id, **kwargs):
+        if "adj" in table_id and "kline" in table_id:
+            raise FileNotFoundError(f"Static adj table '{table_id}' not found.")
+        elif "raw" in table_id:
+            return raw_df
+        elif "adj_factor" in table_id:
+            raise FileNotFoundError(f"Factor table '{table_id}' not found.")
+        return pl.DataFrame()
+
+    with patch("cq.data.entrypoints.accessors.base.read", side_effect=mock_read_missing_factor):
+        with pytest.raises(FileNotFoundError, match="Factor table"):
+            cq.data.ashare.kline.get(symbols="sh.600000", adj="adj", source="baostock")
+
+
+def test_accessor_source_and_format_properties():
+    """测试表级与市场级 active_source, source, active_format, format 及 supported_sources 自省能力"""
+    # 1. 全局数据源列表查询
+    sources = cq.data.list_sources()
+    assert "baostock" in sources
+    assert "eastmoney" in sources
+    assert "tdx" in sources
+    assert "stockdb" in sources
+
+    # 2. 表级 active_source 与 source 读取
+    assert cq.data.ashare.kline.active_source == "baostock"
+    assert cq.data.ashare.kline.source == "baostock"
+    assert cq.data.aetf.kline.active_source == "stockdb"
+    assert cq.data.aetf.kline.source == "stockdb"
+
+    # 3. 表级 supported_sources 自省
+    ashare_kline_sources = cq.data.ashare.kline.supported_sources
+    assert "baostock" in ashare_kline_sources
+    assert "tdx" in ashare_kline_sources
+    assert "stockdb" in ashare_kline_sources
+
+    concept_sources = cq.data.ashare.concept.supported_sources
+    assert "eastmoney" in concept_sources
+    assert "stockdb" in concept_sources
+
+    dragon_tiger_sources = cq.data.ashare.dragon_tiger.supported_sources
+    assert dragon_tiger_sources == ["eastmoney"]
+
+    # 4. 表级 supported_formats
+    assert cq.data.ashare.kline.supported_formats == ["parquet", "csv"]
+
+    # 5. 动态修改表级 source 并在 get 中生效
+    try:
+        cq.data.ashare.kline.source = "tdx"
+        assert cq.data.ashare.kline.active_source == "tdx"
+        assert cq.data.ashare.kline.source == "tdx"
+
+        # 验证 repr
+        rep = repr(cq.data.ashare.kline)
+        assert "ashare.kline" in rep
+        assert "active_source='tdx'" in rep
+    finally:
+        # 恢复默认
+        cq.data.ashare.kline.source = None
+
+    # 6. 市场级 source 读写验证
+    try:
+        cq.data.ashare.source = "stockdb"
+        assert cq.data.ashare.active_source == "stockdb"
+        assert cq.data.ashare.source == "stockdb"
+        # 表级继承市场级
+        assert cq.data.ashare.kline.active_source == "stockdb"
+    finally:
+        cq.data.ashare.source = None
+
+    # 7. DefaultConfig 级 active_source 与 active_format
+    assert cq.data.default.active_source == "baostock"
+    assert cq.data.default.active_format == "parquet"
+
+    # 8. 市场级 supported_sources 与 supported_formats
+    ashare_all_sources = cq.data.ashare.supported_sources
+    assert "baostock" in ashare_all_sources
+    assert "eastmoney" in ashare_all_sources
+    assert "tdx" in ashare_all_sources
+    assert "stockdb" in ashare_all_sources
+    assert cq.data.ashare.supported_formats == ["parquet", "csv"]
+
+    assert cq.data.aetf.supported_sources == ["stockdb"]
+    assert cq.data.aindex.supported_sources == ["baostock", "tdx"]
+
+    # 9. 市场级 repr 验证
+    assert "<AShare" in repr(cq.data.ashare)
+    assert "<AETF" in repr(cq.data.aetf)
+    assert "<AIndex" in repr(cq.data.aindex)
+
+
+

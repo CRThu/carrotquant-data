@@ -52,7 +52,7 @@ class AShareKline(_BaseTable):
 
         resolved_kline_source, resolved_kline_format = self._resolve_source_format(source, format)
 
-        # 1. 默认 raw 极速纯净直读路径 (零因子 IO，零 Join 开销)
+        # 1. raw 模式：极速纯净直读原始行情 (零因子 IO，零 Join 开销)
         if adj == "raw":
             table_id = f"{self._PREFIX}.{freq}.raw.{resolved_kline_source}"
             return self._read_table(
@@ -64,7 +64,26 @@ class AShareKline(_BaseTable):
                 format=resolved_kline_format
             )
 
-        # 2. 动态后复权引擎介入 (adj)
+        # 2. 复权模式 (adj)
+        # 2.1 第一优先级：尝试直读已存在的静态 adj 表 (0 因子 IO，0 Join 开销)
+        adj_table_id = f"{self._PREFIX}.{freq}.adj.{resolved_kline_source}"
+        try:
+            df_static = self._read_table(
+                table_id=adj_table_id,
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                columns=columns,
+                format=resolved_kline_format
+            )
+            if not df_static.is_empty():
+                return df_static
+        except (ValueError, FileNotFoundError):
+            # ValueError: 驱动不支持该静态表 (如 TDX/StockDB)
+            # FileNotFoundError: 驱动支持但本地未同步
+            pass
+
+        # 2.2 第二优先级（无静态表或未同步）：自动降级为 raw + factor 动态后复权折算
         raw_table_id = f"{self._PREFIX}.{freq}.raw.{resolved_kline_source}"
         df_kline = self._read_table(
             table_id=raw_table_id,
@@ -78,6 +97,7 @@ class AShareKline(_BaseTable):
             return self._apply_columns(df_kline, columns)
 
         # 读取复权因子表 (不加 start_date 截断，仅限制 <= end_date 以向前追溯历史因子)
+        # 若因子表本地未同步，直接抛出异常中断，严禁隐式静默假复权
         factor_source = self._resolve_factor_source(
             kline_source=resolved_kline_source,
             factor_prefix=self._FACTOR_PREFIX,
@@ -93,7 +113,7 @@ class AShareKline(_BaseTable):
             format=resolved_kline_format
         )
 
-        # 执行动态向量化后复权计算
+        # 执行动态向量化后复权计算 (针对次新股等无除权历史的标的，由 DataAdjuster 内部提供金融级 1.0 保底)
         df_adjusted = DataAdjuster.adjust(df_kline=df_kline, df_factor=df_factor)
 
         # 过滤用户指定的返回字段
@@ -206,3 +226,53 @@ class AShare:
         self.industry = AShareIndustry(parent_default=self.default)
         self.dragon_tiger = AShareDragonTiger(parent_default=self.default)
         self.inst_trade = AShareInstTrade(parent_default=self.default)
+
+    @property
+    def active_source(self) -> str:
+        """返回当前 A 股市场级最终生效的数据源"""
+        return self.default.resolve_source()
+
+    @property
+    def source(self) -> str:
+        """返回当前 A 股市场级最终生效的数据源"""
+        return self.active_source
+
+    @source.setter
+    def source(self, value: Optional[str]) -> None:
+        """设置当前 A 股市场级默认数据源覆盖值"""
+        self.default.source = value
+
+    @property
+    def active_format(self) -> str:
+        """返回当前 A 股市场级最终生效的存储格式"""
+        return self.default.resolve_format()
+
+    @property
+    def format(self) -> str:
+        """返回当前 A 股市场级最终生效的存储格式"""
+        return self.active_format
+
+    @format.setter
+    def format(self, value: Optional[str]) -> None:
+        """设置当前 A 股市场级默认存储格式覆盖值"""
+        self.default.format = value
+
+    @property
+    def supported_sources(self) -> List[str]:
+        """返回当前 A 股市场下所有表支持的数据源列表 (去重并排序)"""
+        sources = set()
+        for tbl in (self.kline, self.adj_factor, self.concept, self.industry, self.dragon_tiger, self.inst_trade):
+            sources.update(tbl.supported_sources)
+        return sorted(list(sources))
+
+    @property
+    def supported_formats(self) -> List[str]:
+        """返回当前 A 股市场支持的物理存储格式"""
+        return ["parquet", "csv"]
+
+    def __repr__(self) -> str:
+        return (
+            f"<AShare active_source={self.active_source!r}, active_format={self.active_format!r}, "
+            f"tables=['kline', 'adj_factor', 'concept', 'industry', 'dragon_tiger', 'inst_trade']>"
+        )
+

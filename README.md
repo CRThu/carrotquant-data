@@ -194,7 +194,8 @@ df_adj = cq.data.ashare.kline.get(symbols="sh.600000", adj="adj", start_date="20
 etf_df = cq.data.aetf.kline.get(symbols="sz.159919", freq="1m", adj="raw", start_date="2025-01-02")
 etf_adj = cq.data.aetf.kline.get(symbols="sz.159919", adj="adj")
 
-# 2. 查阅代码清单、时间跨度、Schema 映射与物理总行数
+# 2. 查阅可用数据源驱动、代码清单、时间跨度、Schema 映射与物理总行数
+sources = cq.data.list_sources()                                    # ['baostock', 'eastmoney', 'tdx', 'stockdb']
 symbols = cq.data.list_symbols("ashare.kline.1d.raw.baostock")
 start_dt, end_dt = cq.data.get_time_range("ashare.kline.1d.raw.baostock")
 schema = cq.data.get_schema("ashare.kline.1d.raw.baostock")         # {'timestamp': 'Int64', ...}
@@ -238,6 +239,9 @@ cq.data.sync(table_ids=["ashare.kline.1d.raw.baostock"], formats=["parquet"])
 可在终端或 Cron 定时任务中直接调用 `cqdata` 交互：
 
 ```bash
+# 查看系统支持的所有数据源及其数据表
+cqdata sources
+
 # 查看本地存储的所有数据表概览
 cqdata tables
 

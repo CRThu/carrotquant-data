@@ -131,6 +131,17 @@ def register_provider(source: str, provider: Optional[Any] = None) -> Union[Any,
 
 
 
+def list_sources() -> List[str]:
+    """
+    列出当前系统中所有已注册/可用数据源驱动标识符清单。
+    包含内置数据源 ('baostock', 'eastmoney', 'tdx', 'stockdb') 与通过 register_provider 动态注册的自定义源。
+
+    Returns:
+        List[str]: 数据源标识符列表，例如 ['baostock', 'eastmoney', 'tdx', 'stockdb']
+    """
+    return ProviderManager.get_all_sources()
+
+
 def list_tables(format: str = "auto") -> List[Dict[str, str]]:
     """
     列出本地已存在的所有数据表清单及分类信息 (平铺对象列表)

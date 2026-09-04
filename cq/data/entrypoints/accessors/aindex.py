@@ -58,3 +58,50 @@ class AIndex:
     def __init__(self, parent_default: DefaultConfig):
         self.default = DefaultConfig(parent=parent_default)
         self.kline = AIndexKline(parent_default=self.default)
+
+    @property
+    def active_source(self) -> str:
+        """返回当前指数市场级最终生效的数据源"""
+        return self.default.resolve_source()
+
+    @property
+    def source(self) -> str:
+        """返回当前指数市场级最终生效的数据源"""
+        return self.active_source
+
+    @source.setter
+    def source(self, value: Optional[str]) -> None:
+        """设置当前指数市场级默认数据源覆盖值"""
+        self.default.source = value
+
+    @property
+    def active_format(self) -> str:
+        """返回当前指数市场级最终生效的存储格式"""
+        return self.default.resolve_format()
+
+    @property
+    def format(self) -> str:
+        """返回当前指数市场级最终生效的存储格式"""
+        return self.active_format
+
+    @format.setter
+    def format(self, value: Optional[str]) -> None:
+        """设置当前指数市场级默认存储格式覆盖值"""
+        self.default.format = value
+
+    @property
+    def supported_sources(self) -> List[str]:
+        """返回当前指数市场支持的数据源列表"""
+        return self.kline.supported_sources
+
+    @property
+    def supported_formats(self) -> List[str]:
+        """返回当前指数市场支持的物理存储格式"""
+        return ["parquet", "csv"]
+
+    def __repr__(self) -> str:
+        return (
+            f"<AIndex active_source={self.active_source!r}, active_format={self.active_format!r}, "
+            f"tables=['kline']>"
+        )
+

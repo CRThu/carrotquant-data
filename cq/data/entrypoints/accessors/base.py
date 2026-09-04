@@ -81,6 +81,16 @@ class DefaultConfig:
             curr = curr.parent
         return "parquet"
 
+    @property
+    def active_source(self) -> str:
+        """返回当前层级最终生效的数据源"""
+        return self.resolve_source()
+
+    @property
+    def active_format(self) -> str:
+        """返回当前层级最终生效的存储格式"""
+        return self.resolve_format()
+
     def update_from_dict(self, data: Dict[str, Any]) -> None:
         """根据配置字典批量更新字段"""
         if not isinstance(data, dict):
@@ -109,7 +119,58 @@ class _BaseTable:
     _FALLBACK_SOURCE: str = "baostock"
 
     def __init__(self, parent_default: DefaultConfig):
-        self.default = DefaultConfig(parent=parent_default, fallback_source=self._FALLBACK_SOURCE)
+        self.default = DefaultConfig(
+            parent=parent_default,
+            fallback_source=self._FALLBACK_SOURCE
+        )
+
+    @property
+    def active_source(self) -> str:
+        """返回当前最终生效的数据源标识符"""
+        return self.default.resolve_source()
+
+    @property
+    def source(self) -> str:
+        """返回当前最终生效的数据源标识符"""
+        return self.active_source
+
+    @source.setter
+    def source(self, value: Optional[str]) -> None:
+        """设置当前表级数据源覆盖值"""
+        self.default.source = value
+
+    @property
+    def active_format(self) -> str:
+        """返回当前最终生效的存储格式"""
+        return self.default.resolve_format()
+
+    @property
+    def format(self) -> str:
+        """返回当前最终生效的存储格式"""
+        return self.active_format
+
+    @format.setter
+    def format(self, value: Optional[str]) -> None:
+        """设置当前表级存储格式覆盖值"""
+        self.default.format = value
+
+    @property
+    def supported_sources(self) -> List[str]:
+        """返回当前表所支持的所有数据源标识符列表"""
+        return ProviderManager().get_sources_for_prefix(self._PREFIX)
+
+    @property
+    def supported_formats(self) -> List[str]:
+        """返回当前表所支持的所有存储格式列表"""
+        return ["parquet", "csv"]
+
+    def __repr__(self) -> str:
+        return (
+            f"<TableAccessor prefix={self._PREFIX!r} "
+            f"active_source={self.active_source!r} "
+            f"supported_sources={self.supported_sources!r} "
+            f"active_format={self.active_format!r}>"
+        )
 
     def _resolve_source_format(
         self,

@@ -34,7 +34,8 @@ from cq.data.entrypoints.python_api import (
     get_time_range,
     get_schema,
     get_row_count,
-    sync
+    sync,
+    list_sources
 )
 from cq.data.provider.tdx_downloader import download_and_extract
 
@@ -363,6 +364,36 @@ def api_list_all_tables(format: str = "auto"):
         }
     except Exception as e:
         handle_endpoint_exception(e, "GET tables")
+
+
+@app.get("/api/v1/sources")
+def api_list_sources():
+    """
+    获取系统当前已加载/注册的所有数据源驱动清单及其支持的数据表列表。
+    包含内置数据源 ('baostock', 'eastmoney', 'tdx', 'stockdb') 与动态注册的自定义源。
+    """
+    try:
+        from cq.data.provider.provider_manager import ProviderManager
+        pm = ProviderManager()
+        sources = list_sources()
+        result = []
+        for src in sources:
+            try:
+                prov = pm._providers.get(src) or pm.get_provider(f"probe.{src}")
+                supported_tables = prov.get_supported_tables()
+            except Exception:
+                supported_tables = []
+            result.append({
+                "source": src,
+                "supported_tables": supported_tables,
+                "table_count": len(supported_tables)
+            })
+        return {
+            "total": len(result),
+            "sources": result
+        }
+    except Exception as e:
+        handle_endpoint_exception(e, "GET sources")
 
 
 @app.get("/api/v1/tables/detailed")

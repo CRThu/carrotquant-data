@@ -86,3 +86,31 @@ class ProviderManager:
                 
         return self._providers[source]
 
+    @classmethod
+    def get_all_sources(cls) -> list[str]:
+        """获取所有内置及自定义已注册的数据源标识符列表"""
+        builtin = ["baostock", "eastmoney", "tdx", "stockdb"]
+        custom = list(cls._custom_providers.keys())
+        seen = set()
+        result = []
+        for s in builtin + custom:
+            if s not in seen:
+                seen.add(s)
+                result.append(s)
+        return result
+
+    def get_sources_for_prefix(self, prefix: str) -> list[str]:
+        """根据表 ID 前缀 (如 'ashare.kline') 探查所有支持该类数据的数据源标识符"""
+        matching_sources = []
+        for src in self.get_all_sources():
+            try:
+                prov = self._providers.get(src)
+                if prov is None:
+                    prov = self.get_provider(f"probe.{src}")
+                tables = prov.get_supported_tables()
+                if any(t.startswith(prefix + ".") or t == prefix for t in tables):
+                    matching_sources.append(src)
+            except Exception:
+                continue
+        return sorted(matching_sources)
+

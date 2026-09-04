@@ -63,6 +63,18 @@ def test_cli_tables_command(mock_cli_storage, temp_data_dir):
     assert "本地数据表概览" in result.stdout
 
 
+def test_cli_sources_command():
+    """测试 cqdata sources 命令输出"""
+    result = runner.invoke(app, ["sources"])
+    assert result.exit_code == 0
+    assert "系统可用数据源" in result.stdout
+    assert "baostock" in result.stdout
+    assert "eastmoney" in result.stdout
+    assert "tdx" in result.stdout
+    assert "stockdb" in result.stdout
+
+
+
 def test_cli_info_command(mock_cli_storage, temp_data_dir):
     """测试 cqdata info 命令输出"""
     table_id = mock_cli_storage

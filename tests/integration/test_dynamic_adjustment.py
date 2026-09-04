@@ -220,3 +220,60 @@ def test_end_to_end_subnew_stock_fallback(populated_kline_and_factor_storage):
     assert not df_subnew.is_empty()
     assert df_subnew["close"].to_list() == [50.0]
     assert df_subnew["open"].to_list() == [50.0]
+
+
+def test_end_to_end_static_adj_precedence(populated_kline_and_factor_storage, temp_data_dir):
+    """端到端验证：当本地已同步静态 adj 表时，优先 0 Join 直读静态表"""
+    data_dir = str(temp_data_dir)
+    meta_mgr = MetadataManager(data_dir)
+    storage_pq_ts = StorageFactory.get_storage("parquet", data_dir=data_dir, category="timeseries")
+
+    # 写入静态 adj 数据 (假设 close 值为 99.0 以明确区分动态计算)
+    static_adj_df = pl.DataFrame({
+        "symbol": ["sh.600000"],
+        "datetime": ["2024-06-05T15:00:00.000+08:00"],
+        "timestamp": [1717570800000],
+        "open": [99.0],
+        "high": [100.0],
+        "low": [98.0],
+        "close": [99.0],
+        "volume": [1200.0],
+        "amount": [12480.0],
+        "trade_status": ["1"],
+    }, schema={
+        "symbol": pl.String,
+        "datetime": pl.String,
+        "timestamp": pl.Int64,
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume": pl.Float64,
+        "amount": pl.Float64,
+        "trade_status": pl.String,
+    })
+
+    storage_pq_ts.write_series("ashare.kline.1d.adj.baostock", static_adj_df)
+    meta_mgr.save("ashare.kline.1d.adj.baostock", "parquet", {
+        "version": 1,
+        "table_id": "ashare.kline.1d.adj.baostock",
+        "category": "timeseries",
+        "format": "parquet",
+        "schema": {
+            "symbol": "String", "datetime": "String", "timestamp": "Int64",
+            "open": "Float64", "high": "Float64", "low": "Float64", "close": "Float64",
+            "volume": "Float64", "amount": "Float64", "trade_status": "String"
+        },
+        "statistics": {"start_datetime": "2024-06-05T15:00:00.000+08:00", "end_datetime": "2024-06-05T15:00:00.000+08:00", "total_bars": 1}
+    })
+
+    # 调用 get(adj="adj") -> 优先直读静态 adj 表
+    df_res = cq.data.ashare.kline.get(
+        symbols="sh.600000",
+        adj="adj",
+        start_date="2024-06-05",
+        end_date="2024-06-05"
+    )
+    assert not df_res.is_empty()
+    assert df_res["close"].to_list() == [99.0]
+

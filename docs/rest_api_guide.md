@@ -41,6 +41,7 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
 | :--- | :--- | :---: | :--- |
 | **前端 UI 托管** | `/` | `GET` | 内置托管的 React Web 金融终端主界面（支持 SPA 路由） |
 | **系统探针** | `/health` | `GET` | 服务运行状态探针与 `data_dir` 探查 |
+| | `/sources` | `GET` | 列出系统当前已加载/注册的所有数据源驱动清单及其支持的数据表列表 |
 | **元数据探查** | `/tables` | `GET` | 列出本地所有数据表清单（平铺对象数组，含 `category` 分类） |
 | | `/tables/detailed` | `GET` | 获取所有数据表及其各格式 (Parquet/CSV) 独立水位线与条数的详细元数据 |
 | | `/tables/{table_id}/boards` | `GET` | 极速获取板块概念/行业列表及各板块成分股计数 (轻量 20KB 响应包) |
@@ -112,7 +113,75 @@ curl -X GET "http://127.0.0.1:8000/api/v1/tables?format=auto"
 
 ---
 
-### 3.3 查看表存储格式 (`GET /api/v1/tables/{table_id}/formats`)
+### 3.3 数据源清单探查 (`GET /api/v1/sources`)
+
+获取系统当前已加载/注册的所有可用数据源驱动清单，包含各个数据源当前支持抓取与同步的完整数据表列表。
+
+#### 响应 JSON 结构示例
+```json
+{
+  "total": 4,
+  "sources": [
+    {
+      "source": "baostock",
+      "supported_tables": [
+        "ashare.kline.1d.adj.baostock",
+        "ashare.kline.1d.raw.baostock",
+        "ashare.kline.5m.adj.baostock",
+        "ashare.kline.5m.raw.baostock",
+        "aindex.kline.1d.raw.baostock",
+        "ashare.adj_factor.baostock"
+      ],
+      "table_count": 6
+    },
+    {
+      "source": "eastmoney",
+      "supported_tables": [
+        "ashare.concept.eastmoney",
+        "ashare.industry.eastmoney",
+        "ashare.dragon_tiger.eastmoney",
+        "ashare.inst_trade.eastmoney"
+      ],
+      "table_count": 4
+    },
+    {
+      "source": "tdx",
+      "supported_tables": [
+        "ashare.kline.1d.raw.tdx",
+        "ashare.kline.5m.raw.tdx",
+        "ashare.kline.1m.raw.tdx",
+        "aindex.kline.1d.raw.tdx",
+        "aindex.kline.5m.raw.tdx",
+        "aindex.kline.1m.raw.tdx"
+      ],
+      "table_count": 6
+    },
+    {
+      "source": "stockdb",
+      "supported_tables": [
+        "ashare.kline.1m.raw.stockdb",
+        "ashare.kline.1d.raw.stockdb",
+        "ashare.adj_factor.stockdb",
+        "ashare.concept.stockdb",
+        "ashare.industry.stockdb",
+        "aetf.kline.1m.raw.stockdb",
+        "aetf.kline.1d.raw.stockdb",
+        "aetf.adj_factor.stockdb"
+      ],
+      "table_count": 8
+    }
+  ]
+}
+```
+
+#### cURL 示例
+```bash
+curl -X GET "http://127.0.0.1:8000/api/v1/sources"
+```
+
+---
+
+### 3.4 查看表存储格式 (`GET /api/v1/tables/{table_id}/formats`)
 
 #### 路径参数 (Path Parameters)
 | 参数名 | 说明 |

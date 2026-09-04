@@ -34,7 +34,8 @@ from cq.data.entrypoints import (
     default,
     ashare,
     aetf,
-    aindex
+    aindex,
+    list_sources
 )
 from cq.data.config import settings
 
@@ -44,6 +45,7 @@ __all__ = [
     "read",
     "write",
     "register_provider",
+    "list_sources",
     "list_tables",
     "list_formats",
     "list_symbols",
