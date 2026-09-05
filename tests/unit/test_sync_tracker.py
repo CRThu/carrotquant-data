@@ -5,8 +5,12 @@ SyncProgressTracker 单元测试。
 验证精准进度 (current/total/percentage/current_symbol)、状态切换与 error_msg 捕获。
 """
 
+import asyncio
+import threading
+import time
 import pytest
 from cq.data.service.sync_tracker import SyncProgressTracker, sync_tracker
+from cq.data.service.sync_broadcaster import sync_broadcaster
 
 
 def test_sync_tracker_singleton():
@@ -55,9 +59,7 @@ def test_task_status_failure():
 
 
 def test_sync_broadcaster_event_dispatch():
-    """验证 SyncBroadcaster 订阅与 sync_tracker 变更联动广播"""
-    from cq.data.service.sync_broadcaster import sync_broadcaster
-
+    """验证 SyncBroadcaster 订阅与 sync_tracker 变更联动广播 (无事件循环同步模式)"""
     q = sync_broadcaster.subscribe()
     try:
         assert q in sync_broadcaster.subscribers
@@ -84,3 +86,24 @@ def test_sync_broadcaster_event_dispatch():
     finally:
         sync_broadcaster.unsubscribe(q)
         assert q not in sync_broadcaster.subscribers
+
+
+@pytest.mark.asyncio
+async def test_sync_broadcaster_cross_thread_asyncio_wakeup():
+    """验证后台 Worker 线程更新 sync_tracker 能够跨线程安全唤醒主事件循环中的 q.get()"""
+    q = sync_broadcaster.subscribe()
+    try:
+        def bg_worker():
+            time.sleep(0.02)
+            sync_tracker.start_task("table.stream.async_test", message="异步唤醒测试")
+
+        t = threading.Thread(target=bg_worker)
+        t.start()
+
+        msg = await asyncio.wait_for(q.get(), timeout=1.0)
+        assert msg["type"] == "progress"
+        assert msg["item"]["table_id"] == "table.stream.async_test"
+        t.join()
+    finally:
+        sync_broadcaster.unsubscribe(q)
+

@@ -34,14 +34,11 @@ class SyncBroadcaster:
         self._sub_lock = threading.Lock()
 
     def subscribe(self) -> asyncio.Queue:
-        """注册一个新的 SSE 订阅队列，绑定当前调用者线程的 asyncio 事件循环"""
+        """注册一个新的 SSE 订阅队列，记录当前正在运行的 asyncio 事件循环"""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = None
+            loop = None
         q: asyncio.Queue = asyncio.Queue()
         with self._sub_lock:
             self.subscribers[q] = loop
@@ -55,12 +52,12 @@ class SyncBroadcaster:
     def broadcast(self, payload: Dict[str, Any]):
         """
         向所有在线 SSE 客户端分发最新的任务进度状态。
-        使用 loop.call_soon_threadsafe 保证可在任何 OS 工作线程中安全调用。
+        若订阅者事件循环正在运行，使用 loop.call_soon_threadsafe 跨线程唤醒；否则直接写入队列。
         """
         with self._sub_lock:
             for q, loop in list(self.subscribers.items()):
                 try:
-                    if loop and not loop.is_closed():
+                    if loop and loop.is_running():
                         loop.call_soon_threadsafe(q.put_nowait, payload)
                     else:
                         q.put_nowait(payload)

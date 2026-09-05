@@ -5,8 +5,10 @@ cqdata 终端命令行控制台主入口 (Typer CLI)。
 集成数据同步 (sync)、服务启动 (serve)、交互向导 (wizard)、表探索 (tables) 与信息探查 (info)。
 """
 
-import typer
 import sys
+import threading
+import webbrowser
+import typer
 import uvicorn
 from typing import List, Optional
 from pathlib import Path
@@ -99,9 +101,6 @@ def server_cmd(
     """
     启动 FastAPI REST API HTTP 服务与 React Web 终端 (例如 cqdata server -p 8888 --open)
     """
-
-    import threading
-    import webbrowser
 
     if config:
         settings.configure(config)
