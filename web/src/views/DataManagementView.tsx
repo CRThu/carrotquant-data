@@ -30,27 +30,45 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({ onSyncSt
     }
   };
 
-  // 2. 轮询各表精准同步状态 (固定 2 秒简洁轮询)
-  const checkSyncStatus = async () => {
-    try {
-      const res = await apiClient.getSyncStatus();
-      setStatuses(res.statuses || {});
-      const activeList = res.active_tasks || [];
-      setActiveTasks(activeList);
-      if (onSyncStatusChange) {
-        onSyncStatusChange(activeList.length);
-      }
-    } catch (e) {
-      // 静默
-    }
-  };
-
   useEffect(() => {
     fetchDetailedTables();
-    checkSyncStatus();
 
-    const timer = setInterval(checkSyncStatus, 2000);
-    return () => clearInterval(timer);
+    // 基于 SSE 实时事件流监听同步状态 (彻底消除 setInterval 定时轮询)
+    const es = apiClient.createSyncEventSource();
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'snapshot') {
+          setStatuses(data.statuses || {});
+          const activeList = data.active_tasks || [];
+          setActiveTasks(activeList);
+          if (onSyncStatusChange) {
+            onSyncStatusChange(activeList.length);
+          }
+        } else if (data.type === 'progress') {
+          const item: SyncStatusItem = data.item;
+          if (item) {
+            setStatuses((prev) => ({ ...prev, [item.table_id]: item }));
+          }
+          const activeList = data.active_tasks || [];
+          setActiveTasks(activeList);
+          if (onSyncStatusChange) {
+            onSyncStatusChange(activeList.length);
+          }
+          // 任务完成或失败时，自动刷新一次物理存储元数据
+          if (item && (item.status === 'success' || item.status === 'failed')) {
+            fetchDetailedTables();
+          }
+        }
+      } catch (e) {
+        // 静默 ping 心跳
+      }
+    };
+
+    return () => {
+      es.close();
+    };
   }, []);
 
   // 触发同步逻辑
@@ -66,7 +84,6 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({ onSyncSt
     setError(null);
     try {
       await apiClient.triggerSync(payload);
-      checkSyncStatus();
     } catch (err: any) {
       console.error('Failed to trigger sync', err);
       setError(err?.response?.data?.detail || err?.message || '启动同步失败');

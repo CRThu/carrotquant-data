@@ -13,6 +13,8 @@ interface SettingsViewProps {
     status: string;
     version: string;
     data_dir: string;
+    log_dir?: string;
+    log_level?: string;
     active_tasks: number;
   } | null;
 }
@@ -195,6 +197,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 md:col-span-3">
               <div className="text-slate-500 text-[11px] mb-1">物理数据落盘存储目录 (data_dir)</div>
               <div className="font-mono text-cyan-300 select-all truncate">{healthInfo.data_dir}</div>
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 md:col-span-2">
+              <div className="text-slate-500 text-[11px] mb-1">日志落盘存储目录 (log_dir)</div>
+              <div className="font-mono text-cyan-300 select-all truncate">{healthInfo.log_dir || 'logs'}</div>
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="text-slate-500 text-[11px] mb-1">系统日志级别 (log_level)</div>
+              <div className="font-mono text-cyan-400 font-bold">{healthInfo.log_level || 'INFO'}</div>
             </div>
           </div>
         ) : (

@@ -30,11 +30,11 @@ CarrotQuant.Data/
 │       ├── entrypoints/              # 接入层 (accessors/ OOP子包, python_api, cli, rest_api)
 │       │   ├── accessors/            # OOP 便捷访问层 (base.py, ashare.py, aetf.py, aindex.py)
 │       │   ├── python_api.py         # Python SDK 底层切片与探查 API
-│       │   ├── cli.py                # Typer CLI 控制台主入口 (cqdata sync/server/info/tables)
-│       │   └── rest_api.py           # FastAPI REST HTTP 服务 (含 Loguru SSE 日志流 & /tables/detailed)
-│       ├── config/                   # 配置管理 (支持 CQDATA_DATA_DIR 环境变量与 YAML)
+│       │   ├── cli.py                # Typer CLI 控制台主入口 (cqdata sync/server/info/tables, 支持 --log-dir/--log-level)
+│       │   └── rest_api.py           # FastAPI REST HTTP 服务 (含 SSE 实时进度推流 /sync/stream、Loguru 日志流 & /tables/detailed)
+│       ├── config/                   # 配置管理 (支持 CQDATA_DATA_DIR/CQDATA_LOG_DIR 环境变量与 YAML 自闭环刷新)
 │       ├── provider/                 # 数据源驱动层 (Baostock, EastMoney, TDX, StockDB, DataCleaner, ProviderManager)
-│       ├── service/                  # 业务逻辑层 (SyncManager, SyncProgressTracker, DataReader, TaskPlanner, MetadataManager)
+│       ├── service/                  # 业务逻辑层 (SyncManager, SyncProgressTracker, SyncBroadcaster, DataReader, TaskPlanner, MetadataManager)
 │       ├── storage/                  # 持久化存储层 (CSVStorage, ParquetStorage, StorageFactory, DataMerger)
 │       └── utils/                    # 工具箱 (logger_utils, time_utils)
 ├── web/                          # React Web 金融终端 frontend (Bun + Vite 6 + Tailwind v4 + TradingView 3-Pane)
@@ -149,15 +149,16 @@ SyncManager.sync()
 ## 4. 核心模块与类职责
 
 ### 4.1 接入层与配置 (Gateway & Config)
-- **`config/settings.py`**: 全局 `Settings` 配置管理，支持自动加载本地 `.env` 环境变量、通过 `cq.data.configure()` 加载 YAML 配置，或使用环境变量 `CQDATA_DATA_DIR` 和 `CQDATA_CONFIG_PATH`。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)，`.env` 模板见 [.env.sample](file:///d:/Quant/carrotquant-data/.env.sample)。
+- **`config/settings.py`**: 全局 `Settings` 配置管理，支持自动加载本地 `.env` 环境变量、通过 `cq.data.configure()` 加载 YAML 配置，或使用环境变量 `CQDATA_DATA_DIR`、`CQDATA_CONFIG_PATH`、`CQDATA_LOG_DIR` 与 `CQDATA_LOG_LEVEL`，并在初始化与动态配置变更时自动调用 `_refresh_logger()` 闭环挂载日志落盘句柄。完整 YAML 配置示例见 [config.yaml.sample](file:///d:/Quant/CarrotQuant.Data/config/config.yaml.sample)，`.env` 模板见 [.env.sample](file:///d:/Quant/carrotquant-data/.env.sample)。
 - **`accessors/` 包**: 提供 OOP 便捷访问层子包（`ashare.kline`, `aetf.kline`, `aindex.kline` 等）。遵循权责到表原则：数据源（`source`, `supported_sources`）与存储格式（`format`, `supported_formats`）严格收敛于具体表级独立管理并具备强类型防呆拦截；市场级（`ashare`, `aetf`, `aindex`）作为零状态纯净命名空间。默认 `raw` 极速零开销直读原始行情；显式 `adj="adj"` 时优先直读静态复权表，若无则平滑降级为 `raw + adj_factor` 动态后复权折算（因子缺失时严格抛错中断）；概念与行业板块（`ashare.concept`, `ashare.industry`）原生支持 `board_code` 精确定向过滤成分股。
 - **`python_api.py`**: 提供 SDK 高阶 API (`read`, `write`, `register_provider` 双模注册器/类装饰器, `list_sources`, `list_tables`, `sync`, `configure`, `get_schema`, `get_time_range` 等)，以磁盘物理 `metadata.json` 与动态 Provider 路由为基础，原生支持内置表与自定义外部表。
-- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata sources`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
-- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/sources` 数据源清单探查、`GET /api/v1/tables` 表元数据探查、`GET /api/v1/data/{market}/{category}` 通用动态业务语义切片查询（全自动智能路由 OOP 访问器与外部导入表，服务端开箱即用动态后复权折算）与 `GET /api/v1/query` 底层物理切片查询，所有 Polars IO/磁盘读取端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
+- **`cli.py`**: 基于 Typer 的 CLI 工具 (`cqdata sync`, `cqdata import`, `cqdata sources`, `cqdata tables`, `cqdata info`, `cqdata server`, `cqdata wizard`)，`sync` 与 `server` 原生支持 `--log-dir` 与 `--log-level` 自定义日志参数，支持通过 `cqdata server --open` 自动唤醒系统浏览器访问内置 Web 终端，支持 `cqdata import` 导入外部 CSV/Parquet 文件。
+- **`rest_api.py`**: 基于 FastAPI 的 RESTful HTTP 服务，挂载 CORS 跨域中间件，提供 `POST /api/v1/write` 写入、`GET /api/v1/sources` 数据源清单探查、`GET /api/v1/tables` 表元数据探查、`GET /api/v1/data/{market}/{category}` 通用动态业务语义切片查询（全自动智能路由 OOP 访问器与外部导入表，服务端开箱即用动态后复权折算）与 `GET /api/v1/query` 底层物理切片查询，以及 `GET /api/v1/sync/stream`（任务进度实时主动推流）与 `GET /api/v1/logs/stream`（系统日志实时推流），所有流均注入防代理缓冲响应头；数据切片端点均采用普通 `def` 函数声明派发至底层的 Worker 线程池并发处理，杜绝主事件循环卡顿，并内置托管 `cq/data/static/` 前端 SPA 静态资源。
 
 
 ### 4.2 业务服务层 (Service)
 - **`SyncManager`**: 数据同步总调度器，贯穿 Provider 拉取、批处理、Storage 写入与元数据盖章。
+- **`SyncProgressTracker` / `SyncBroadcaster`**: 任务状态机与实时广播单例。`SyncProgressTracker` 维护精准进度与错误状态，在状态跃迁时通过 `SyncBroadcaster` 使用 `loop.call_soon_threadsafe` 跨线程向 Web 客户端分发 `snapshot` 快照与 `progress` 增量推流，实现前端零 `setInterval` 轮询。
 - **`DataWriter`**: 统一外部数据写入服务，负责外部 DataFrame 标准化（默认 `timeseries` 时序契约、显式 `event` 事件表、补齐 `timestamp` 与 ISO `datetime`）、多格式持久化落盘与原子化元数据生成。
 
 - **`DataReader` / `MetadataReader`**: 提供多年份切片读取、按列投影选择与元数据探查。

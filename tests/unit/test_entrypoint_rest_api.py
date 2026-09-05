@@ -421,5 +421,39 @@ def test_dynamic_market_data_aindex_kline_handles_adj_safely():
         assert "adj" not in call_kwargs
 
 
+def test_rest_api_health_endpoint():
+    """测试 GET /api/v1/health 返回包含 log_dir 与 log_level"""
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "log_dir" in data
+    assert "log_level" in data
 
 
+def test_rest_api_sync_stream_endpoint():
+    """测试 GET /api/v1/sync/stream SSE 端点参数及防缓冲 Header 规范"""
+    with patch("cq.data.entrypoints.rest_api.StreamingResponse") as mock_stream:
+        mock_stream.return_value = {"status": "ok"}
+        response = client.get("/api/v1/sync/stream")
+        assert response.status_code == 200
+        assert mock_stream.called
+        _, kwargs = mock_stream.call_args
+        assert kwargs.get("media_type") == "text/event-stream"
+        assert kwargs.get("headers", {}).get("Content-Encoding") == "identity"
+        assert kwargs.get("headers", {}).get("Cache-Control") == "no-cache"
+        assert kwargs.get("headers", {}).get("X-Accel-Buffering") == "no"
+
+
+def test_rest_api_logs_stream_endpoint():
+    """测试 GET /api/v1/logs/stream SSE 端点参数及防缓冲 Header 规范"""
+    with patch("cq.data.entrypoints.rest_api.StreamingResponse") as mock_stream:
+        mock_stream.return_value = {"status": "ok"}
+        response = client.get("/api/v1/logs/stream")
+        assert response.status_code == 200
+        assert mock_stream.called
+        _, kwargs = mock_stream.call_args
+        assert kwargs.get("media_type") == "text/event-stream"
+        assert kwargs.get("headers", {}).get("Content-Encoding") == "identity"
+        assert kwargs.get("headers", {}).get("Cache-Control") == "no-cache"
+        assert kwargs.get("headers", {}).get("X-Accel-Buffering") == "no"

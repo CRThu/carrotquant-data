@@ -28,21 +28,28 @@ class LogBroadcaster:
         if getattr(self, "_initialized", False):
             return
         self._initialized = True
-        self.history: deque = deque(maxlen=max_history)
-        self.subscribers: Set[asyncio.Queue] = set()
+        self.history: deque = deque(maxlen=max_history or 1000)
+        self.subscribers: Dict[asyncio.Queue, Optional[asyncio.AbstractEventLoop]] = {}
         self._sub_lock = threading.Lock()
 
     def subscribe(self) -> asyncio.Queue:
-        """注册一个新的 SSE 订阅队列"""
+        """注册一个新的 SSE 订阅队列，记录其所属的 asyncio 事件循环"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
         q: asyncio.Queue = asyncio.Queue()
         with self._sub_lock:
-            self.subscribers.add(q)
+            self.subscribers[q] = loop
         return q
 
     def unsubscribe(self, q: asyncio.Queue):
         """解绑并移除一个 SSE 订阅队列"""
         with self._sub_lock:
-            self.subscribers.discard(q)
+            self.subscribers.pop(q, None)
 
     def get_history(self) -> List[Dict[str, Any]]:
         """获取当前内存中的历史日志列表"""
@@ -53,6 +60,7 @@ class LogBroadcaster:
         """
         Loguru 自定义 Sink 回调函数。
         记录 timestamp, level, name, line, message，并推送到历史缓存与各个 SSE 订阅队列。
+        使用 loop.call_soon_threadsafe 确保跨线程 Worker 唤醒主事件循环。
         """
         record = message.record
         time_str = record["time"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -65,9 +73,12 @@ class LogBroadcaster:
         }
         with self._sub_lock:
             self.history.append(log_entry)
-            for q in list(self.subscribers):
+            for q, loop in list(self.subscribers.items()):
                 try:
-                    q.put_nowait(log_entry)
+                    if loop and not loop.is_closed():
+                        loop.call_soon_threadsafe(q.put_nowait, log_entry)
+                    else:
+                        q.put_nowait(log_entry)
                 except Exception:
                     pass
 
@@ -113,9 +124,10 @@ def setup_logger(
     # 移除默认的配置 (默认只输出到 stderr)
     logger.remove()
 
-    # 添加控制台输出
+    # 添加控制台输出 (优先原生 sys.__stderr__，防止测试重定向流关闭后引发 I/O operation on closed file)
+    console_sink = sys.__stderr__ if sys.__stderr__ is not None else sys.stderr
     logger.add(
-        sys.stderr, 
+        console_sink, 
         level=log_level,
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )

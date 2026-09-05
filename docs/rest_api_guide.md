@@ -57,6 +57,7 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
 | **同步任务控制** | `/sync` | `POST` | 触发后台数据全自动增量/全量同步任务 |
 | | `/tasks` | `GET` | 获取当前正在后台运行的同步任务列表 |
 | | `/sync/status` | `GET` | 获取全局同步任务精准进度、百分比与处理 Symbol 字典 |
+| | `/sync/stream` | `GET` | **【SSE】** Server-Sent Events 任务同步进度与状态实时主动推流通道 |
 | | `/logs/stream` | `GET` | **【SSE】** Server-Sent Events 全局 Loguru 系统与数据引擎日志实时推送流 |
 | **文件系统探查** | `/filesystem/list` | `GET` | 通用本地文件/目录列表探查 API（为 Web 端文件浏览器 Modal 提供支持） |
 
@@ -76,6 +77,8 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
   "status": "ok",
   "version": "1.1.0",
   "data_dir": "D:\\Quant\\CarrotQuant.Data\\data",
+  "log_dir": "D:\\Quant\\CarrotQuant.Data\\logs",
+  "log_level": "INFO",
   "active_tasks": 0
 }
 ```
@@ -492,4 +495,90 @@ curl -X POST "http://127.0.0.1:8000/api/v1/sync" \
 #### cURL 示例
 ```bash
 curl -X GET "http://127.0.0.1:8000/api/v1/tasks"
+```
+
+---
+
+### 3.13 获取同步任务详细进度 (`GET /api/v1/sync/status`)
+
+获取所有正在运行或已结束的同步任务精准进度、处理代码与状态。
+
+#### 响应 JSON 结构示例
+```json
+{
+  "active_tasks": ["ashare.kline.1d.raw.baostock"],
+  "statuses": {
+    "ashare.kline.1d.raw.baostock": {
+      "table_id": "ashare.kline.1d.raw.baostock",
+      "status": "running",
+      "current": 45,
+      "total": 100,
+      "percentage": 45.0,
+      "current_symbol": "sh.600000",
+      "message": "正在抓取 sh.600000 (45/100)",
+      "start_time": 1718000000.0,
+      "end_time": null,
+      "error_msg": null
+    }
+  }
+}
+```
+
+#### cURL 示例
+```bash
+curl -X GET "http://127.0.0.1:8000/api/v1/sync/status"
+```
+
+---
+
+### 3.14 实时任务进度主动推流 (`GET /api/v1/sync/stream`)
+
+基于 **Server-Sent Events (SSE)** 协议的任务状态实时主动推流通道，彻底消除客户端定时器轮询：
+- **握手快照 (`snapshot`)**：客户端建立连接后，服务端立即下发包含所有任务当前状态与活跃列表的全量快照；
+- **增量推流 (`progress`)**：在每次任务开启 (`start`)、单证券进度更新 (`update`) 或结束 (`finish`) 时微秒级主动推流；
+- **空闲心跳 (`: ping\n\n`)**：无任务状态变动时每秒发送轻量心跳保持长连接活跃；
+- **防代理缓冲响应头**：注入 `Content-Encoding: identity`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`，绕过 GZip 与反向代理缓冲。
+
+#### SSE 推送数据帧示例
+```http
+data: {"type": "snapshot", "statuses": {...}, "active_tasks": ["ashare.kline.1d.raw.baostock"]}
+
+data: {"type": "progress", "item": {"table_id": "ashare.kline.1d.raw.baostock", "status": "running", "current": 46, "total": 100, "percentage": 46.0, "current_symbol": "sh.600004"}, "active_tasks": ["ashare.kline.1d.raw.baostock"]}
+
+: ping
+```
+
+---
+
+### 3.15 实时系统日志推流 (`GET /api/v1/logs/stream`)
+
+基于 **Server-Sent Events (SSE)** 的 Loguru 引擎全局日志实时推送通道：
+- **历史回放**：连接建立时自动向客户端下发最近的内存历史日志（最多 1000 条）；
+- **实时广播**：后续所有数据引擎、存储落盘与系统运行日志实时推流；
+- **防代理缓冲**：注入 `Content-Encoding: identity`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`。
+
+#### SSE 推送数据帧示例
+```http
+data: {"timestamp": "2026-09-05 20:00:00.123", "level": "INFO", "name": "SyncManager", "line": 158, "message": "Starting batch sync for ashare.kline.1d.raw.baostock"}
+```
+
+---
+
+### 3.16 本地文件系统探查 (`GET /api/v1/filesystem/list`)
+
+为 Web 端文件路径选择器提供本地目录浏览能力。
+
+#### Query 查询参数
+- `path` (选填): 指定浏览的绝对路径（缺省时为当前工作目录）。
+
+#### 响应 JSON 结构示例
+```json
+{
+  "current_path": "D:\\Quant\\CarrotQuant.Data",
+  "parent_path": "D:\\Quant",
+  "items": [
+    {"name": "data", "path": "D:\\Quant\\CarrotQuant.Data\\data", "is_dir": true, "size": 0},
+    {"name": "config.yaml", "path": "D:\\Quant\\CarrotQuant.Data\\config.yaml", "is_dir": false, "size": 156}
+  ]
+}
 ```

@@ -8,6 +8,7 @@ FastAPI REST API 全流程端到端集成测试。
 import pytest
 from fastapi.testclient import TestClient
 from pathlib import Path
+from unittest.mock import patch
 import polars as pl
 
 from cq.data.entrypoints.rest_api import app
@@ -115,4 +116,43 @@ def test_rest_api_full_flow_with_physical_storage(temp_data_dir, monkeypatch):
     assert dyn_data["total"] == 2
     assert dyn_data["count"] == 2
     assert dyn_data["columns"] == ["timestamp", "symbol", "close"]
+
+
+def test_rest_api_health_log_config():
+    """验证 /api/v1/health 返回包含 log_dir 与 log_level"""
+    resp = client.get("/api/v1/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "log_dir" in data
+    assert "log_level" in data
+    assert data["log_level"] in ("INFO", "DEBUG", "WARNING", "ERROR")
+
+
+def test_rest_api_sync_stream_snapshot():
+    """验证 /api/v1/sync/stream SSE 连接端点参数、防缓冲 headers 与推流契约"""
+    with patch("cq.data.entrypoints.rest_api.StreamingResponse") as mock_stream:
+        mock_stream.return_value = {"status": "ok"}
+        resp = client.get("/api/v1/sync/stream")
+        assert resp.status_code == 200
+        assert mock_stream.called
+        _, kwargs = mock_stream.call_args
+        assert kwargs.get("media_type") == "text/event-stream"
+        assert kwargs.get("headers", {}).get("Content-Encoding") == "identity"
+        assert kwargs.get("headers", {}).get("Cache-Control") == "no-cache"
+        assert kwargs.get("headers", {}).get("X-Accel-Buffering") == "no"
+
+
+def test_rest_api_logs_stream_headers():
+    """验证 /api/v1/logs/stream 带有防 GZip 缓冲 headers"""
+    with patch("cq.data.entrypoints.rest_api.StreamingResponse") as mock_stream:
+        mock_stream.return_value = {"status": "ok"}
+        resp = client.get("/api/v1/logs/stream")
+        assert resp.status_code == 200
+        assert mock_stream.called
+        _, kwargs = mock_stream.call_args
+        assert kwargs.get("media_type") == "text/event-stream"
+        assert kwargs.get("headers", {}).get("Content-Encoding") == "identity"
+        assert kwargs.get("headers", {}).get("Cache-Control") == "no-cache"
+        assert kwargs.get("headers", {}).get("X-Accel-Buffering") == "no"
 

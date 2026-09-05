@@ -105,6 +105,23 @@ def test_cli_sync_command(mock_cli_storage, temp_data_dir):
         assert kwargs["symbol_limit"] == 10
 
 
+def test_cli_sync_command_with_log_options(mock_cli_storage, temp_data_dir):
+    """测试 cqdata sync 传递 --log-dir 与 --log-level 参数生效"""
+    custom_log_dir = temp_data_dir / "cli_logs"
+    with patch("cq.data.entrypoints.cli.api_sync") as mock_api_sync:
+        result = runner.invoke(app, [
+            "sync",
+            "-t", "ashare.kline.1d.raw.baostock",
+            "--log-dir", str(custom_log_dir),
+            "--log-level", "DEBUG"
+        ])
+        assert result.exit_code == 0
+        assert mock_api_sync.called
+        from cq.data.config import settings
+        assert settings.log_dir == str(custom_log_dir)
+        assert settings.log_level == "DEBUG"
+
+
 def test_cli_server_help():
     """测试 cqdata server --help"""
     result = runner.invoke(app, ["server", "--help"])
@@ -240,5 +257,37 @@ def test_cli_import_nonexistent_file():
     assert result.exit_code != 0
     output_text = result.stdout + (result.stderr if hasattr(result, "stderr") and result.stderr else "")
     assert "不存在" in output_text or result.exit_code == 1
+
+
+def test_cli_sync_log_options(temp_data_dir):
+    """测试 cqdata sync 支持 --log-dir 与 --log-level 选项"""
+    with patch("cq.data.entrypoints.cli.api_sync") as mock_api_sync, \
+         patch("cq.data.entrypoints.cli.setup_logger") as mock_setup_logger:
+        result = runner.invoke(app, [
+            "sync",
+            "-t", "ashare.kline.1d.raw.baostock",
+            "--log-dir", str(temp_data_dir / "logs"),
+            "--log-level", "DEBUG",
+            "-o", str(temp_data_dir)
+        ])
+        assert result.exit_code == 0
+        assert mock_setup_logger.called
+        assert mock_setup_logger.call_args[1]["log_dir"] == str(temp_data_dir / "logs")
+        assert mock_setup_logger.call_args[1]["log_level"] == "DEBUG"
+
+
+def test_cli_server_log_options(temp_data_dir):
+    """测试 cqdata server 支持 --log-dir 与 --log-level 选项"""
+    with patch("uvicorn.run") as mock_uvicorn, \
+         patch("cq.data.entrypoints.cli.setup_logger") as mock_setup_logger:
+        result = runner.invoke(app, [
+            "server",
+            "--log-dir", str(temp_data_dir / "server_logs"),
+            "--log-level", "WARNING"
+        ])
+        assert result.exit_code == 0
+        assert mock_setup_logger.called
+        assert mock_setup_logger.call_args[1]["log_dir"] == str(temp_data_dir / "server_logs")
+        assert mock_setup_logger.call_args[1]["log_level"] == "WARNING"
 
 

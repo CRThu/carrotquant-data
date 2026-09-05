@@ -46,11 +46,25 @@ export const SyncModal: React.FC<SyncModalProps> = ({ isOpen, onClose }) => {
   };
 
   useEffect(() => {
-    if (isOpen) {
-      checkActiveTasks();
-      const timer = setInterval(checkActiveTasks, 3000);
-      return () => clearInterval(timer);
-    }
+    if (!isOpen) return;
+
+    // 基于 SSE 实时接收活动任务状态 (彻底消除 setInterval 定时器)
+    const es = apiClient.createSyncEventSource();
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'snapshot' || data.type === 'progress') {
+          setActiveTasks(data.active_tasks || []);
+        }
+      } catch (e) {
+        // 静默 ping 心跳
+      }
+    };
+
+    return () => {
+      es.close();
+    };
   }, [isOpen]);
 
   useEffect(() => {

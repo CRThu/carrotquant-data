@@ -30,6 +30,7 @@ class Settings:
 
         # 初始化时自动加载配置
         self._load_initial_config()
+        self._refresh_logger()
 
     def _load_initial_config(self) -> None:
         """

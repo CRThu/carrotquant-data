@@ -200,6 +200,14 @@ export const apiClient = {
     const sseUrl = typeof window !== 'undefined' ? '/api/v1/logs/stream' : 'http://localhost:8888/api/v1/logs/stream';
     return new EventSource(sseUrl);
   },
+
+  /**
+   * 创建 SSE (Server-Sent Events) 同步任务实时进度推流 EventSource 连接
+   */
+  createSyncEventSource(): EventSource {
+    const sseUrl = typeof window !== 'undefined' ? '/api/v1/sync/stream' : 'http://localhost:8888/api/v1/sync/stream';
+    return new EventSource(sseUrl);
+  },
 };
 
 

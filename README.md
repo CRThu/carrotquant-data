@@ -299,6 +299,8 @@ cqdata sync -t ashare.concept.stockdb,ashare.industry.stockdb
 - `-s` / `--start` & `-e` / `--end`: 选填，时间范围，留空则是自动接续水位线增量同步。
 - `--force`: 选填，强制全量刷新覆盖。
 - `--limit`: 选填，限制同步代码数量（调试用）。
+- `--log-dir`: 选填，日志持久化存储目录（默认 `logs`）。
+- `--log-level`: 选填，日志输出级别（默认 `INFO`，可选 `DEBUG/INFO/WARNING/ERROR`）。
 
 ### 方式三：使用终端交互向导 (Wizard)
 
@@ -312,6 +314,7 @@ cqdata wizard
 cqdata server --port 8888 --open
 
 # (也可使用 -c 指定配置文件: cqdata server -p 8888 -c ./config.yaml -o)
+# (支持 --log-dir 与 --log-level 指定日志落盘路径与日志级别)
 ```
 
 启动后内置托管 React Web 终端并提供基于 FastAPI 的 RESTful HTTP 接口（全量端点汇总）：
@@ -319,7 +322,7 @@ cqdata server --port 8888 --open
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/` | GET | 内置托管的 React Web 金融终端主界面 |
-| `/api/v1/health` | GET | 系统健康检查与服务运行状态探针 |
+| `/api/v1/health` | GET | 系统健康检查与服务运行状态探针 (含 `data_dir`, `log_dir`, `log_level`) |
 | `/api/v1/tables` | GET | 列出本地所有数据表总览 (平铺列表，含 `category` 属性) |
 | `/api/v1/tables/detailed` | GET | 获取所有数据表及其各存储格式 (Parquet / CSV) 独立物理元数据 |
 | `/api/v1/tables/{table_id}/formats` | GET | 获取指定表已存储的物理格式列表 (`['parquet', 'csv']`) |
@@ -332,6 +335,7 @@ cqdata server --port 8888 --open
 | `/api/v1/sync` | POST | 异步触发后台数据同步任务 |
 | `/api/v1/tasks` | GET | 查询当前正在运行的同步任务列表 |
 | `/api/v1/sync/status` | GET | 获取所有同步任务的详细进度状态（含百分比、当前代码与错误信息） |
+| `/api/v1/sync/stream` | GET | SSE (Server-Sent Events) 任务同步进度与状态实时主动推流通道 |
 | `/api/v1/logs/stream` | GET | SSE (Server-Sent Events) 实时系统与数据同步日志流 |
 | `/api/v1/tdx/check` | GET | 检查通达信本地 `vipdoc` 目录有效性与代码统计 |
 | `/api/v1/tdx/download` | POST | 后台从通达信官方服务器下载全量 `hsjday.zip` 日线包并自动解压 |

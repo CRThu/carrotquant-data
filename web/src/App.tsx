@@ -35,48 +35,52 @@ export const App: React.FC = () => {
     localStorage.setItem('cqdata_color_mode', colorMode);
   }, [colorMode]);
 
-  // 全局轮询获取活动中的任务状态 (带引用比对，相同状态不触发 React 重绘)
+  // 基于 SSE 实时事件流监听后台同步任务状态 (彻底消除 setInterval 定时器)
   useEffect(() => {
-    let isMounted = true;
-    const pollStatus = async () => {
-      try {
-        const res = await apiClient.getSyncStatus();
-        if (!isMounted) return;
+    const es = apiClient.createSyncEventSource();
 
-        const tasksCount = (res.active_tasks || []).length;
-        setActiveTaskCount((prev) => (prev !== tasksCount ? tasksCount : prev));
+    const handlePayload = (data: any) => {
+      if (!data) return;
 
-        const allStatuses = Object.values(res.statuses || {});
+      if (data.type === 'snapshot') {
+        const tasksCount = (data.active_tasks || []).length;
+        setActiveTaskCount(tasksCount);
+
+        const allStatuses: SyncStatusItem[] = Object.values(data.statuses || {});
         const runningTask = allStatuses
           .filter((s) => s.status === 'running')
           .sort((a, b) => (b.start_time || 0) - (a.start_time || 0))[0];
+        setRunningStatus(runningTask || null);
+      } else if (data.type === 'progress') {
+        const tasksCount = (data.active_tasks || []).length;
+        setActiveTaskCount(tasksCount);
 
-        const targetTask = runningTask || null;
-
-        setRunningStatus((prev) => {
-          if (!prev && !targetTask) return null;
-          if (
-            prev &&
-            targetTask &&
-            prev.table_id === targetTask.table_id &&
-            prev.status === targetTask.status &&
-            prev.current === targetTask.current &&
-            prev.percentage === targetTask.percentage
-          ) {
-            return prev; // 返回引用完全相同的对象，指示 React 跳过组件树重绘
-          }
-          return targetTask;
-        });
-      } catch (e) {
-        // 静默
+        const item: SyncStatusItem = data.item;
+        if (item) {
+          setRunningStatus((prev) => {
+            if (item.status === 'running') {
+              return item;
+            }
+            if (prev && prev.table_id === item.table_id) {
+              return item;
+            }
+            return prev;
+          });
+        }
       }
     };
 
-    pollStatus();
-    const timer = setInterval(pollStatus, 3000);
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handlePayload(data);
+      } catch (e) {
+        // 静默 ping 心跳
+      }
+    };
+
     return () => {
-      isMounted = false;
-      clearInterval(timer);
+      es.close();
     };
   }, []);
 

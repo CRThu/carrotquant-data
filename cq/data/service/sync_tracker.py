@@ -9,6 +9,7 @@ cqdata/service/sync_tracker.py
 import time
 from threading import Lock
 from typing import Dict, Any, Optional
+from cq.data.service.sync_broadcaster import sync_broadcaster
 
 
 class SyncTaskStatus:
@@ -63,6 +64,15 @@ class SyncProgressTracker:
         self.task_statuses: Dict[str, SyncTaskStatus] = {}
         self._lock = Lock()
 
+    def _broadcast_change(self, status_obj: SyncTaskStatus):
+        """辅助方法：广播单个任务的状态更新与当前活跃任务列表"""
+        active_tasks = [tid for tid, s in self.task_statuses.items() if s.status == "running"]
+        sync_broadcaster.broadcast({
+            "type": "progress",
+            "item": status_obj.to_dict(),
+            "active_tasks": active_tasks
+        })
+
     def start_task(self, table_id: str, message: str = "正在初始化同步任务..."):
         """标记某个表开启同步"""
         with self._lock:
@@ -81,6 +91,8 @@ class SyncProgressTracker:
             status_obj.end_time = None
             status_obj.error_msg = None
 
+            self._broadcast_change(status_obj)
+
     def update_progress(self, table_id: str, current: int, total: int, current_symbol: str = "", message: str = ""):
         """更新某个表的当前进度、正在下载的代码与命令行式动态提示"""
         with self._lock:
@@ -97,6 +109,8 @@ class SyncProgressTracker:
                 status_obj.current_symbol = current_symbol
             if message:
                 status_obj.message = message
+
+            self._broadcast_change(status_obj)
 
     def finish_task(self, table_id: str, success: bool = True, message: str = "", error_msg: str = None):
         """标记某个表完成同步 (成功或失败存入 message 与 error_msg)"""
@@ -117,6 +131,8 @@ class SyncProgressTracker:
                 status_obj.error_msg = error_msg
 
             status_obj.end_time = time.time()
+
+            self._broadcast_change(status_obj)
 
     def get_all_statuses(self) -> Dict[str, Dict[str, Any]]:
         """获取所有任务的状态字典"""

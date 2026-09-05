@@ -52,3 +52,35 @@ def test_task_status_failure():
     assert statuses[table_id]["status"] == "failed"
     assert statuses[table_id]["message"] == "抓取失败: 网络超时"
     assert statuses[table_id]["error_msg"] == "Network connection timeout"
+
+
+def test_sync_broadcaster_event_dispatch():
+    """验证 SyncBroadcaster 订阅与 sync_tracker 变更联动广播"""
+    from cq.data.service.sync_broadcaster import sync_broadcaster
+
+    q = sync_broadcaster.subscribe()
+    try:
+        assert q in sync_broadcaster.subscribers
+
+        # 触发 start_task
+        sync_tracker.start_task("table.stream.test", message="开始任务测试")
+        msg = q.get_nowait()
+        assert msg["type"] == "progress"
+        assert msg["item"]["table_id"] == "table.stream.test"
+        assert msg["item"]["status"] == "running"
+        assert "table.stream.test" in msg["active_tasks"]
+
+        # 触发 update_progress
+        sync_tracker.update_progress("table.stream.test", current=10, total=20, current_symbol="sh.600000")
+        msg2 = q.get_nowait()
+        assert msg2["item"]["current"] == 10
+        assert msg2["item"]["percentage"] == 50.0
+
+        # 触发 finish_task
+        sync_tracker.finish_task("table.stream.test", success=True)
+        msg3 = q.get_nowait()
+        assert msg3["item"]["status"] == "success"
+        assert "table.stream.test" not in msg3["active_tasks"]
+    finally:
+        sync_broadcaster.unsubscribe(q)
+        assert q not in sync_broadcaster.subscribers

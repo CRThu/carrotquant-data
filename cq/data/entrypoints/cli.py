@@ -26,6 +26,7 @@ from cq.data.entrypoints.python_api import (
 
 from cq.data.provider.tdx_downloader import download_and_extract as tdx_download_and_extract
 from cq.data.service.wizard import start_wizard as run_wizard
+from cq.data.utils.logger_utils import setup_logger
 
 
 app = typer.Typer(
@@ -47,6 +48,8 @@ def sync_cmd(
     batch: int = typer.Option(100, "--batch", help="批处理聚合长度"),
     limit: Optional[int] = typer.Option(None, "--limit", help="限制同步的证券数量 (常用于测试)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="自定义存储根目录"),
+    log_dir: Optional[str] = typer.Option(None, "--log-dir", help="日志持久化落盘目录 (默认从 settings 或 logs 读取)"),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="日志输出级别 (INFO/DEBUG/WARNING/ERROR)"),
     local: bool = typer.Option(False, "--local", help="TDX 驱动专用：是否使用本地 vipdoc 模式"),
     tdx_vipdoc: str = typer.Option(r"C:\new_tdx\vipdoc", "--tdx-vipdoc", help="TDX vipdoc 目录路径")
 ):
@@ -56,13 +59,18 @@ def sync_cmd(
     table_list = [t.strip() for t in tables.split(",") if t.strip()]
     format_list = [f.strip() for f in formats.split(",") if f.strip()]
     
+    if log_dir:
+        settings.log_dir = log_dir
+    if log_level:
+        settings.log_level = log_level.upper()
+    setup_logger(log_level=settings.log_level, log_dir=settings.log_dir, log_file_prefix="cli_sync")
+
     provider_kwargs = {}
     if any(".tdx" in t for t in table_list):
         provider_kwargs["mode"] = "local" if local else "online"
         provider_kwargs["vipdoc_dir"] = tdx_vipdoc
 
     if output:
-        from cq.data.config import settings
         settings.data_dir = output
 
     api_sync(
@@ -84,7 +92,9 @@ def server_cmd(
     reload: bool = typer.Option(False, "--reload", help="是否开启热重载"),
     open_browser: bool = typer.Option(False, "--open", "-o", help="服务启动后自动调起系统默认浏览器访问 Web 终端"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="加载指定 YAML 配置文件路径"),
-    data_dir: Optional[str] = typer.Option(None, "--data-dir", help="指定数据存储根目录")
+    data_dir: Optional[str] = typer.Option(None, "--data-dir", help="指定数据存储根目录"),
+    log_dir: Optional[str] = typer.Option(None, "--log-dir", help="指定日志存储目录"),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="指定日志记录级别")
 ):
     """
     启动 FastAPI REST API HTTP 服务与 React Web 终端 (例如 cqdata server -p 8888 --open)
@@ -93,11 +103,15 @@ def server_cmd(
     import threading
     import webbrowser
 
-    from cq.data.config import settings
     if config:
         settings.configure(config)
     if data_dir:
         settings.data_dir = data_dir
+    if log_dir:
+        settings.log_dir = log_dir
+    if log_level:
+        settings.log_level = log_level.upper()
+    setup_logger(log_level=settings.log_level, log_dir=settings.log_dir, log_file_prefix="server")
 
     if open_browser:
         display_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host

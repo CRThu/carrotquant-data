@@ -163,6 +163,14 @@ describe('apiClient full execution coverage test suite', () => {
     apiClient.createLogEventSource();
     expect(mockEventSource).toHaveBeenCalledWith('http://localhost:8888/api/v1/logs/stream');
   });
+
+  it('should create Sync EventSource using /api/v1/sync/stream', () => {
+    const mockEventSource = vi.fn();
+    vi.stubGlobal('EventSource', mockEventSource);
+
+    apiClient.createSyncEventSource();
+    expect(mockEventSource).toHaveBeenCalledWith('http://localhost:8888/api/v1/sync/stream');
+  });
 });
 
 

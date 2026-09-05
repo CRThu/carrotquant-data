@@ -44,6 +44,7 @@ from cq.data.provider.tdx_downloader import download_and_extract
 from cq.data.provider.tdx_utils import discover_tdx_symbols_from_local
 from cq.data.service.metadata_manager import MetadataManager
 from cq.data.service.sync_tracker import sync_tracker
+from cq.data.service.sync_broadcaster import sync_broadcaster
 
 
 class SPAStaticFiles(StaticFiles):
@@ -88,6 +89,8 @@ async def api_health_check():
         "status": "ok",
         "version": __version__,
         "data_dir": str(settings.data_dir),
+        "log_dir": str(settings.log_dir),
+        "log_level": str(settings.log_level),
         "active_tasks": len(ACTIVE_SYNC_TASKS)
     }
 
@@ -855,7 +858,52 @@ async def api_logs_stream(request: Request):
         finally:
             log_broadcaster.unsubscribe(q)
 
-    return StreamingResponse(log_event_generator(), media_type="text/event-stream")
+    headers = {
+        "Content-Encoding": "identity",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(log_event_generator(), media_type="text/event-stream", headers=headers)
+
+
+@app.get("/api/v1/sync/stream")
+async def api_sync_stream(request: Request):
+    """
+    【SSE】Server-Sent Events 任务同步进度与状态实时推流通道。
+    连接建立时立即推送当前全量状态快照，之后在每次进度变更 (start/update/finish) 时毫秒级推流。
+    彻底消除前端通过定时器进行 HTTP 轮询的延迟与性能浪费。
+    """
+    async def sync_event_generator():
+        q = sync_broadcaster.subscribe()
+        try:
+            # 1. 握手时立即下发全量状态快照
+            snapshot = {
+                "type": "snapshot",
+                "statuses": sync_tracker.get_all_statuses(),
+                "active_tasks": list(ACTIVE_SYNC_TASKS),
+            }
+            yield f"data: {json.dumps(snapshot, ensure_ascii=False)}\n\n"
+
+            # 2. 循环监听增量进度事件 (定期检查客户端断连状态)
+            while not await request.is_disconnected():
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=1.0)
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            sync_broadcaster.unsubscribe(q)
+
+    headers = {
+        "Content-Encoding": "identity",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(sync_event_generator(), media_type="text/event-stream", headers=headers)
 
 
 # ==================== TDX 离线包与路径检查 Endpoints ====================

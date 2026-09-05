@@ -66,3 +66,14 @@ def test_configure_non_existent_file_raises():
     with pytest.raises(FileNotFoundError, match="Config file not found"):
         cq.data.configure("non_existent_path_12345.yaml")
 
+
+def test_settings_log_env_override_and_refresh(tmp_path, monkeypatch):
+    """测试通过环境变量 CQDATA_LOG_DIR 与 CQDATA_LOG_LEVEL 覆盖并在初始化时自动闭环刷新"""
+    test_log_dir = tmp_path / "custom_logs"
+    monkeypatch.setenv("CQDATA_LOG_DIR", str(test_log_dir))
+    monkeypatch.setenv("CQDATA_LOG_LEVEL", "DEBUG")
+
+    s = Settings()
+    assert s.log_dir == str(test_log_dir)
+    assert s.log_level == "DEBUG"
+

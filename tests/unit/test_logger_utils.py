@@ -7,6 +7,7 @@ cq/data/utils/logger_utils.py 日志与 LogBroadcaster 广播单例单元测试�
 
 import pytest
 import asyncio
+import datetime
 import sys
 import threading
 from cq.data.utils.logger_utils import LogBroadcaster, setup_logger, SuppressOutput
@@ -118,3 +119,33 @@ def test_suppress_output():
 
     assert sys.stdout is stdout_before
     assert sys.stderr is stderr_before
+
+
+@pytest.mark.asyncio
+async def test_log_broadcaster_cross_thread_asyncio_wakeup():
+    """验证后台 Worker 线程写入日志能够跨线程通过 call_soon_threadsafe 毫秒级安全唤醒主事件循环中的 q.get()"""
+    broadcaster = LogBroadcaster()
+    q = broadcaster.subscribe()
+    try:
+        def bg_worker():
+            import time
+            time.sleep(0.02)
+            # 在独立 OS 工作线程触发 sink
+            broadcaster.sink(type("FakeMsg", (), {"record": {
+                "time": datetime.datetime(2026, 9, 5, 12, 0, 0),
+                "level": type("FakeLevel", (), {"name": "INFO"})(),
+                "name": "worker_test",
+                "line": 42,
+                "message": "Async wakeup from thread"
+            }})())
+
+        t = threading.Thread(target=bg_worker)
+        t.start()
+
+        # 等待主协程从 q 中获取，若无 call_soon_threadsafe 唤醒则会导致死锁超时
+        entry = await asyncio.wait_for(q.get(), timeout=1.0)
+        assert entry["message"] == "Async wakeup from thread"
+        assert entry["name"] == "worker_test"
+        t.join()
+    finally:
+        broadcaster.unsubscribe(q)
