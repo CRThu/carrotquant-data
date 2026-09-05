@@ -3,9 +3,16 @@ import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import type { OHLCBar, HistogramBar, MovingAverageData, ColorMode, BSMarkerItem } from '../types/api';
 import { getUpDownColors } from '../types/api';
 
+export interface HoverBarInfo extends OHLCBar {
+  ma5?: number;
+  ma10?: number;
+  ma20?: number;
+}
+
 export interface ChartEngineMountOptions {
   colorMode?: ColorMode;
-  onCrosshairMove?: (bar: OHLCBar | null) => void;
+  onCrosshairMove?: (bar: HoverBarInfo | null) => void;
+  onLoadMoreHistory?: () => void;
 }
 
 /**
@@ -16,6 +23,8 @@ export interface ChartEngineMountOptions {
 export class KLineCanvasEngine {
   private chartMain: IChartApi | null = null;
   private chartVol: IChartApi | null = null;
+  private mainContainer: HTMLDivElement | null = null;
+  private volContainer: HTMLDivElement | null = null;
 
   private candlestickSeries: ISeriesApi<'Candlestick'> | null = null;
   private ma5Series: ISeriesApi<'Line'> | null = null;
@@ -24,7 +33,8 @@ export class KLineCanvasEngine {
   private volumeSeries: ISeriesApi<'Histogram'> | null = null;
 
   private colorMode: ColorMode = 'redUpGreenDown';
-  private onCrosshairMoveCb?: (bar: OHLCBar | null) => void;
+  private onCrosshairMoveCb?: (bar: HoverBarInfo | null) => void;
+  private onLoadMoreHistoryCb?: () => void;
   private lastDataKey: string = '';
 
   /**
@@ -35,8 +45,11 @@ export class KLineCanvasEngine {
     volContainer: HTMLDivElement,
     options: ChartEngineMountOptions = {}
   ): void {
+    this.mainContainer = mainContainer;
+    this.volContainer = volContainer;
     this.colorMode = options.colorMode || 'redUpGreenDown';
     this.onCrosshairMoveCb = options.onCrosshairMove;
+    this.onLoadMoreHistoryCb = options.onLoadMoreHistory;
 
     const { upColor, downColor } = getUpDownColors(this.colorMode);
 
@@ -60,7 +73,7 @@ export class KLineCanvasEngine {
     // 1. 主图 K 线 (开启全套缩放与滚轮手势)
     this.chartMain = createChart(mainContainer, {
       ...commonOptions,
-      height: 320,
+      height: mainContainer.clientHeight || 320,
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
       handleScroll: { mouseWheel: true, pressedMouseMove: true },
     });
@@ -73,11 +86,27 @@ export class KLineCanvasEngine {
       wickDownColor: downColor,
     });
 
-    this.ma5Series = this.chartMain.addLineSeries({ color: '#eab308', lineWidth: 1, title: 'MA5' });
-    this.ma10Series = this.chartMain.addLineSeries({ color: '#a855f7', lineWidth: 1, title: 'MA10' });
-    this.ma20Series = this.chartMain.addLineSeries({ color: '#06b6d4', lineWidth: 1, title: 'MA20' });
+    // 均线 Series 隐藏右侧纵坐标标签与价格线，数值移至顶部 Legend 随动展示，不遮挡股价轴
+    this.ma5Series = this.chartMain.addLineSeries({
+      color: '#eab308',
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    this.ma10Series = this.chartMain.addLineSeries({
+      color: '#a855f7',
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    this.ma20Series = this.chartMain.addLineSeries({
+      color: '#06b6d4',
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
 
-    // 十字光标悬浮监听
+    // 十字光标悬浮监听 (实时提取光标所在蜡烛的 OHLC 与对应均线值，驱动 Legend 随动)
     this.chartMain.subscribeCrosshairMove((param) => {
       if (!this.onCrosshairMoveCb) return;
 
@@ -89,6 +118,10 @@ export class KLineCanvasEngine {
       if (this.candlestickSeries) {
         const data = param.seriesData.get(this.candlestickSeries) as any;
         if (data && typeof data.close === 'number') {
+          const ma5Val = this.ma5Series ? (param.seriesData.get(this.ma5Series) as any)?.value : undefined;
+          const ma10Val = this.ma10Series ? (param.seriesData.get(this.ma10Series) as any)?.value : undefined;
+          const ma20Val = this.ma20Series ? (param.seriesData.get(this.ma20Series) as any)?.value : undefined;
+
           this.onCrosshairMoveCb({
             time: String(param.time),
             open: data.open,
@@ -96,6 +129,9 @@ export class KLineCanvasEngine {
             low: data.low,
             close: data.close,
             volume: data.volume ?? 0,
+            ma5: typeof ma5Val === 'number' ? ma5Val : undefined,
+            ma10: typeof ma10Val === 'number' ? ma10Val : undefined,
+            ma20: typeof ma20Val === 'number' ? ma20Val : undefined,
           });
         }
       }
@@ -104,16 +140,29 @@ export class KLineCanvasEngine {
     // 2. 附图 成交量 VOL (由主图单向指挥)
     this.chartVol = createChart(volContainer, {
       ...commonOptions,
-      height: 120,
+      height: volContainer.clientHeight || 128,
       handleScale: false,
       handleScroll: false,
+      timeScale: {
+        visible: false, // 隐藏副图时间轴，时间与主图强同步，全部垂直空间完整留给成交量柱与纵坐标
+      },
     });
 
     this.volumeSeries = this.chartVol.addHistogramSeries({
       priceFormat: { type: 'volume' },
+      priceScaleId: 'right',
     });
 
-    // 单向 Master -> Follower 零冲突强同步
+    // 为成交量纵坐标设置安全内边距，确保 0 刻度与最大成交量文字完全不被裁剪
+    this.chartVol.priceScale('right').applyOptions({
+      scaleMargins: {
+        top: 0.18,
+        bottom: 0.06,
+      },
+      borderColor: '#1e293b',
+    });
+
+    // 单向 Master -> Follower 零冲突强同步与无限向左滚动探针
     this.chartMain.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (range && this.chartVol) {
         try {
@@ -121,6 +170,10 @@ export class KLineCanvasEngine {
         } catch {
           // 静默
         }
+      }
+      // 当向左滑动探测到左侧边界剩余不足 20 根 Bar 时，触发加载更早历史
+      if (range && range.from < 20 && this.onLoadMoreHistoryCb) {
+        this.onLoadMoreHistoryCb();
       }
     });
   }
@@ -132,7 +185,8 @@ export class KLineCanvasEngine {
     ohlcBars: OHLCBar[],
     volumeBars: HistogramBar[],
     maData: MovingAverageData,
-    markers?: BSMarkerItem[]
+    markers?: BSMarkerItem[],
+    options?: { resetView?: boolean; prependCount?: number }
   ): void {
     if (!this.candlestickSeries) return;
 
@@ -140,6 +194,8 @@ export class KLineCanvasEngine {
       this.clear();
       return;
     }
+
+    const prevRange = this.chartMain?.timeScale()?.getVisibleLogicalRange?.();
 
     // 1. 设置 K 线
     this.candlestickSeries.setData(
@@ -187,11 +243,40 @@ export class KLineCanvasEngine {
       );
     }
 
-    // 仅在数据 key 发生改变时自适应视口
+    const isInitial = !this.lastDataKey;
     const currentDataKey = `${ohlcBars[0]?.time}-${ohlcBars[ohlcBars.length - 1]?.time}-${ohlcBars.length}`;
-    if (this.lastDataKey !== currentDataKey && this.chartMain) {
-      this.lastDataKey = currentDataKey;
-      this.chartMain.timeScale().fitContent();
+    this.lastDataKey = currentDataKey;
+
+    if (this.chartMain) {
+      if (options?.prependCount && options.prependCount > 0 && prevRange) {
+        // 向左无缝追加历史数据时，平移视口保持当前焦点位置不变
+        try {
+          this.chartMain.timeScale().setVisibleLogicalRange({
+            from: prevRange.from + options.prependCount,
+            to: prevRange.to + options.prependCount,
+          });
+        } catch {
+          // 静默
+        }
+      } else if (options?.resetView || isInitial) {
+        // 默认首屏适度放大展示最近 ~130 根 K 线，形态清晰可辨，杜绝 1000 根全部挤压在首屏
+        const DEFAULT_VISIBLE_BARS = 130;
+        const totalBars = ohlcBars.length;
+        if (totalBars > DEFAULT_VISIBLE_BARS) {
+          const to = totalBars + 4; // 右侧预留 4 根 Bar 的呼吸边距
+          const from = to - DEFAULT_VISIBLE_BARS;
+          try {
+            this.chartMain.timeScale().setVisibleLogicalRange({ from, to });
+            this.chartVol?.timeScale().setVisibleLogicalRange({ from, to });
+          } catch {
+            this.chartMain.timeScale().fitContent();
+            this.chartVol?.timeScale().fitContent();
+          }
+        } else {
+          this.chartMain.timeScale().fitContent();
+          this.chartVol?.timeScale().fitContent();
+        }
+      }
     }
   }
 
@@ -225,16 +310,25 @@ export class KLineCanvasEngine {
   }
 
   /**
-   * 平滑 resize 画布宽度与高度
+   * 平滑 resize 画布宽度与高度，严格与 DOM 容器实际渲染高度对齐
    */
   public resize(width: number, height: number): void {
     if (width <= 0 || height <= 0) return;
-    const availableH = Math.max(200, height - 42); // 扣除 Header 工具栏
-    const mainH = Math.floor(availableH * 0.7);
-    const volH = Math.max(60, availableH - mainH - 6);
 
-    if (this.chartMain) this.chartMain.applyOptions({ width, height: mainH });
-    if (this.chartVol) this.chartVol.applyOptions({ width, height: volH });
+    if (this.chartMain && this.mainContainer) {
+      const w = this.mainContainer.clientWidth || width;
+      const h = this.mainContainer.clientHeight;
+      if (w > 0 && h > 0) {
+        this.chartMain.applyOptions({ width: w, height: h });
+      }
+    }
+    if (this.chartVol && this.volContainer) {
+      const w = this.volContainer.clientWidth || width;
+      const h = this.volContainer.clientHeight;
+      if (w > 0 && h > 0) {
+        this.chartVol.applyOptions({ width: w, height: h });
+      }
+    }
   }
 
   /**
@@ -255,5 +349,7 @@ export class KLineCanvasEngine {
     this.ma10Series = null;
     this.ma20Series = null;
     this.volumeSeries = null;
+    this.mainContainer = null;
+    this.volContainer = null;
   }
 }

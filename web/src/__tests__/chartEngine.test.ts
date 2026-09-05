@@ -23,6 +23,10 @@ vi.mock('lightweight-charts', () => {
       subscribeVisibleLogicalRangeChange: vi.fn(),
       fitContent: vi.fn(),
       setVisibleLogicalRange: vi.fn(),
+      getVisibleLogicalRange: vi.fn().mockReturnValue({ from: 0, to: 100 }),
+    }),
+    priceScale: vi.fn().mockReturnValue({
+      applyOptions: vi.fn(),
     }),
     applyOptions: vi.fn(),
     remove: vi.fn(),

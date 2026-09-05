@@ -8,6 +8,8 @@ import type {
   SyncStatusResponse,
   TdxCheckResponse,
   FileSystemListResponse,
+  FetchMarketDataParams,
+  DynamicMarketDataResponse,
 } from '../types/api';
 
 /**
@@ -75,6 +77,23 @@ export const apiClient = {
   },
 
   /**
+   * 通用动态业务语义切片查询接口 (GET /api/v1/data/{market}/{category})
+   * 服务端自动调用 OOP 访问器与动态复权引擎，支持通达信/StockDB 动态折算后复权
+   */
+  async fetchMarketData(params: FetchMarketDataParams): Promise<DynamicMarketDataResponse> {
+    const { market, category, ...queryParams } = params;
+    const key = `fetchMarketData:${market}:${category}:${JSON.stringify(queryParams)}`;
+    return deduplicateGet(key, async () => {
+      const res = await api.get(`/data/${market}/${category}`, { params: queryParams });
+      const data = res.data;
+      if (data && !data.table_id && data.resolved_table_id) {
+        data.table_id = data.resolved_table_id;
+      }
+      return data;
+    });
+  },
+
+  /**
    * 统一切片查询接口 (GET /api/v1/query)，集成在途请求合并 deduplication
    */
   async queryData(params: {
@@ -87,6 +106,7 @@ export const apiClient = {
     format?: string;
     page?: number;
     page_size?: number;
+    order?: 'asc' | 'desc';
   }): Promise<QueryMatrixResponse> {
     const key = `queryData:${JSON.stringify(params)}`;
     return deduplicateGet(key, async () => {

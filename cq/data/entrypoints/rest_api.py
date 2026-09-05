@@ -179,119 +179,90 @@ def run_sync_task(
         ACTIVE_SYNC_TASKS.remove(table_id)
 
 
-# 所有支持的标准 Table ID 预定义字典与元数据映射 (全量 16 个内置数据表)
+# 所有支持的标准 Table ID 预定义字典与元数据映射 (全量 24 个内置数据表)
 KNOWN_TABLE_DEFINITIONS = [
     # Baostock 6 表
     {
         "table_id": "ashare.kline.1d.raw.baostock",
-        "name": "Baostock A股日线 (不复权)",
+        "name": "Baostock · A股日线 (不复权)",
         "category": "timeseries",
         "source": "baostock",
         "description": "个股日线 OHLCV 数据，按 [symbol, year] CSV/Parquet 分片"
     },
     {
         "table_id": "ashare.kline.1d.adj.baostock",
-        "name": "Baostock A股日线 (后复权)",
+        "name": "Baostock · A股日线 (后复权)",
         "category": "timeseries",
         "source": "baostock",
         "description": "个股后复权 K 线数据"
     },
     {
         "table_id": "ashare.kline.5m.raw.baostock",
-        "name": "Baostock A股5分钟线 (不复权)",
+        "name": "Baostock · A股5分钟 (不复权)",
         "category": "timeseries",
         "source": "baostock",
         "description": "个股高频 5 分钟 K 线数据"
     },
     {
         "table_id": "ashare.kline.5m.adj.baostock",
-        "name": "Baostock A股5分钟线 (后复权)",
+        "name": "Baostock · A股5分钟 (后复权)",
         "category": "timeseries",
         "source": "baostock",
         "description": "个股高频 5 分钟后复权 K 线数据"
     },
     {
         "table_id": "aindex.kline.1d.raw.baostock",
-        "name": "Baostock 指数日线 (不复权)",
+        "name": "Baostock · 指数日线 (不复权)",
         "category": "timeseries",
         "source": "baostock",
         "description": "大盘与主要指数日线 OHLCV 数据"
     },
     {
         "table_id": "ashare.adj_factor.baostock",
-        "name": "Baostock A股后复权因子",
+        "name": "Baostock · A股后复权因子",
         "category": "event",
         "source": "baostock",
         "description": "个股历史除权除息与后复权因子 (Event 表)"
     },
-    # EastMoney 4 表
-    {
-        "table_id": "ashare.concept.eastmoney",
-        "name": "东方财富 概念板块与成分股",
-        "category": "event",
-        "source": "eastmoney",
-        "description": "东财概念板块代码与成分股映射 (Event 表)"
-    },
-    {
-        "table_id": "ashare.industry.eastmoney",
-        "name": "东方财富 行业板块与成分股",
-        "category": "event",
-        "source": "eastmoney",
-        "description": "东财行业板块成分股映射 (Event 表)"
-    },
-    {
-        "table_id": "ashare.dragon_tiger.eastmoney",
-        "name": "东方财富 龙虎榜每日统计",
-        "category": "event",
-        "source": "eastmoney",
-        "description": "机构与营业部每日上榜明细 (Event 表)"
-    },
-    {
-        "table_id": "ashare.inst_trade.eastmoney",
-        "name": "东方财富 机构交易明细",
-        "category": "event",
-        "source": "eastmoney",
-        "description": "机构席位买卖交易明细 (Event 表)"
-    },
     # TDX (通达信) 6 表
     {
         "table_id": "ashare.kline.1d.raw.tdx",
-        "name": "通达信 A股日线 (TDX)",
+        "name": "通达信 · A股日线 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信本地 vipdoc 或在线日线数据"
     },
     {
         "table_id": "ashare.kline.5m.raw.tdx",
-        "name": "通达信 A股5分钟线 (TDX)",
+        "name": "通达信 · A股5分钟 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信本地 vipdoc 或在线 5 分钟线数据"
     },
     {
         "table_id": "ashare.kline.1m.raw.tdx",
-        "name": "通达信 A股1分钟线 (TDX)",
+        "name": "通达信 · A股1分钟 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信本地 vipdoc 或在线 1 分钟超高频数据"
     },
     {
         "table_id": "aindex.kline.1d.raw.tdx",
-        "name": "通达信 指数日线 (TDX)",
+        "name": "通达信 · 指数日线 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信大盘与主要指数日线数据"
     },
     {
         "table_id": "aindex.kline.5m.raw.tdx",
-        "name": "通达信 指数5分钟线 (TDX)",
+        "name": "通达信 · 指数5分钟 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信大盘与主要指数 5 分钟线数据"
     },
     {
         "table_id": "aindex.kline.1m.raw.tdx",
-        "name": "通达信 指数1分钟线 (TDX)",
+        "name": "通达信 · 指数1分钟 (不复权)",
         "category": "timeseries",
         "source": "tdx",
         "description": "通达信大盘与主要指数 1 分钟线数据"
@@ -299,59 +270,88 @@ KNOWN_TABLE_DEFINITIONS = [
     # StockDB 8 表
     {
         "table_id": "ashare.kline.1d.raw.stockdb",
-        "name": "StockDB A股日线全截面多因子",
+        "name": "StockDB · A股日线 (不复权/全截面因子)",
         "category": "timeseries",
         "source": "stockdb",
         "description": "StockDB LevelDB 时序引擎个股日线与截面多因子"
     },
     {
         "table_id": "ashare.kline.1m.raw.stockdb",
-        "name": "StockDB A股1分钟线",
+        "name": "StockDB · A股1分钟 (不复权)",
         "category": "timeseries",
         "source": "stockdb",
         "description": "StockDB LevelDB 时序引擎个股 1 分钟超高频行情"
     },
     {
         "table_id": "ashare.adj_factor.stockdb",
-        "name": "StockDB A股后复权因子",
+        "name": "StockDB · A股后复权因子",
         "category": "event",
         "source": "stockdb",
         "description": "StockDB 个股历史除权除息后复权因子 (Event 表)"
     },
     {
-        "table_id": "ashare.concept.stockdb",
-        "name": "StockDB 同花顺概念板块",
-        "category": "event",
-        "source": "stockdb",
-        "description": "StockDB 同花顺概念板块成分股平铺表 (Event 表)"
-    },
-    {
-        "table_id": "ashare.industry.stockdb",
-        "name": "StockDB 申万行业板块",
-        "category": "event",
-        "source": "stockdb",
-        "description": "StockDB 申万一/二/三级行业成分股平铺表 (Event 表)"
-    },
-    {
         "table_id": "aetf.kline.1d.raw.stockdb",
-        "name": "StockDB 场内ETF日线",
+        "name": "StockDB · 场内ETF日线 (不复权)",
         "category": "timeseries",
         "source": "stockdb",
         "description": "StockDB 场内基金与 ETF 日线 OHLCV 数据"
     },
     {
         "table_id": "aetf.kline.1m.raw.stockdb",
-        "name": "StockDB 场内ETF 1分钟线",
+        "name": "StockDB · 场内ETF 1分钟 (不复权)",
         "category": "timeseries",
         "source": "stockdb",
         "description": "StockDB 场内基金与 ETF 1 分钟超高频行情"
     },
     {
         "table_id": "aetf.adj_factor.stockdb",
-        "name": "StockDB 场内ETF独立复权因子",
+        "name": "StockDB · 场内ETF独立复权因子",
         "category": "event",
         "source": "stockdb",
         "description": "StockDB 场内基金与 ETF 独立除权分红后复权因子 (Event 表)"
+    },
+    {
+        "table_id": "ashare.concept.stockdb",
+        "name": "StockDB · 同花顺概念板块",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 同花顺概念板块成分股平铺表 (Event 表)"
+    },
+    {
+        "table_id": "ashare.industry.stockdb",
+        "name": "StockDB · 申万行业板块",
+        "category": "event",
+        "source": "stockdb",
+        "description": "StockDB 申万一/二/三级行业成分股平铺表 (Event 表)"
+    },
+    # EastMoney 4 表
+    {
+        "table_id": "ashare.concept.eastmoney",
+        "name": "东方财富 · 概念板块成分",
+        "category": "event",
+        "source": "eastmoney",
+        "description": "东财概念板块代码与成分股映射 (Event 表)"
+    },
+    {
+        "table_id": "ashare.industry.eastmoney",
+        "name": "东方财富 · 行业板块成分",
+        "category": "event",
+        "source": "eastmoney",
+        "description": "东财行业板块成分股映射 (Event 表)"
+    },
+    {
+        "table_id": "ashare.dragon_tiger.eastmoney",
+        "name": "东方财富 · 龙虎榜每日明细",
+        "category": "event",
+        "source": "eastmoney",
+        "description": "机构与营业部每日上榜明细 (Event 表)"
+    },
+    {
+        "table_id": "ashare.inst_trade.eastmoney",
+        "name": "东方财富 · 机构交易明细",
+        "category": "event",
+        "source": "eastmoney",
+        "description": "机构席位买卖交易明细 (Event 表)"
     }
 ]
 
@@ -404,7 +404,7 @@ def api_list_sources():
 def api_list_tables_detailed():
     """
     获取所有数据表及其各个存储格式 (Parquet / CSV) 独立物理元数据的详细列表。
-    方便前端展现层级化数据管理表格与独立格式水位线。
+    按照权威优先级（Baostock -> 通达信 -> StockDB -> 东方财富 -> 外部自定义）进行清晰组织排序。
     """
     try:
         meta_mgr = MetadataManager(settings.data_dir)
@@ -414,8 +414,16 @@ def api_list_tables_detailed():
         # 汇总所有的预定义表以及磁盘发现的其他表
         all_table_ids = set([t["table_id"] for t in KNOWN_TABLE_DEFINITIONS]) | disk_tables
         known_map = {t["table_id"]: t for t in KNOWN_TABLE_DEFINITIONS}
+        known_order = {t["table_id"]: i for i, t in enumerate(KNOWN_TABLE_DEFINITIONS)}
+        source_priority = {"baostock": 10, "tdx": 20, "stockdb": 30, "eastmoney": 40}
 
-        for table_id in sorted(all_table_ids):
+        def table_sort_key(tid: str):
+            if tid in known_order:
+                return (0, known_order[tid])
+            src = tid.split(".")[-1] if "." in tid else "unknown"
+            return (1, source_priority.get(src, 99), tid)
+
+        for table_id in sorted(all_table_ids, key=table_sort_key):
             base_info = known_map.get(table_id, {
                 "table_id": table_id,
                 "name": table_id,
@@ -573,7 +581,8 @@ def api_query(
     columns: Optional[str] = Query(None, description="选挑字段清单，以逗号分隔 (如 timestamp,close)"),
     format: str = Query("auto", description="存储格式 (auto, parquet, csv)"),
     page: int = Query(1, ge=1, description="当前页码 (从1开始)"),
-    page_size: int = Query(5000, ge=1, description="每页记录数")
+    page_size: int = Query(5000, ge=1, description="每页记录数"),
+    order: str = Query("asc", description="时序排序规则：asc (升序，默认)，desc (降序，最新在前)")
 ):
     """
     统一切片查询接口 (自动按 table_id 智能路由)，支持 HTTP GET 查询参数与物理分页，输出二维 List 矩阵
@@ -595,10 +604,17 @@ def api_query(
         if board_code and "board_code" in df.columns:
             df = df.filter(pl.col("board_code") == board_code.strip())
 
+        # 支持显式按时间升序或降序排序
+        sort_col = next((c for c in ["timestamp", "datetime", "date"] if c in df.columns), None)
+        if sort_col and order.strip().lower() == "desc":
+            df = df.sort(sort_col, descending=True)
+        elif sort_col and order.strip().lower() == "asc":
+            df = df.sort(sort_col, descending=False)
+
         total = df.height
         total_pages = math.ceil(total / page_size) if total > 0 else 0
-        offset = (page - 1) * page_size
 
+        offset = (page - 1) * page_size
         sliced_df = df.slice(offset, page_size) if not df.is_empty() else df
 
         return {
@@ -629,7 +645,8 @@ def api_dynamic_market_data(
     source: Optional[str] = Query(None, description="指定底层数据源驱动 (未传则使用表内置默认源)"),
     format: str = Query("auto", description="存储格式 (auto, parquet, csv)"),
     page: int = Query(1, ge=1, description="当前页码 (从1开始)"),
-    page_size: int = Query(5000, ge=1, description="每页记录数")
+    page_size: int = Query(5000, ge=1, description="每页记录数"),
+    order: str = Query("asc", description="时序排序规则：asc (升序，默认)，desc (降序，最新在前)")
 ):
     """
     通用动态业务语义数据切片查询接口：
@@ -726,8 +743,16 @@ def api_dynamic_market_data(
         if board_code and "board_code" in df.columns:
             df = df.filter(pl.col("board_code") == board_code.strip())
 
+        # 支持显式按时间升序或降序排序
+        sort_col = next((c for c in ["timestamp", "datetime", "date"] if c in df.columns), None)
+        if sort_col and order.strip().lower() == "desc":
+            df = df.sort(sort_col, descending=True)
+        elif sort_col and order.strip().lower() == "asc":
+            df = df.sort(sort_col, descending=False)
+
         total = df.height
         total_pages = math.ceil(total / page_size) if total > 0 else 0
+
         offset = (page - 1) * page_size
         sliced_df = df.slice(offset, page_size) if not df.is_empty() else df
 

@@ -156,6 +156,47 @@ describe('apiClient full execution coverage test suite', () => {
     expect(res.table_id).toBe('custom_table');
   });
 
+  it('should verify DATA_SOURCE_METAS contains standardized provider sources', async () => {
+    const { DATA_SOURCE_METAS } = await import('../types/api');
+    expect(DATA_SOURCE_METAS.baostock.name).toBe('Baostock');
+    expect(DATA_SOURCE_METAS.tdx.name).toBe('通达信 (TDX)');
+    expect(DATA_SOURCE_METAS.stockdb.name).toBe('StockDB');
+    expect(DATA_SOURCE_METAS.eastmoney.name).toBe('东方财富');
+    expect(DATA_SOURCE_METAS.custom.name).toBe('外部导入');
+  });
+
+  it('should execute fetchMarketData correctly via /data/{market}/{category}', async () => {
+    const spy = vi.spyOn(axios.Axios.prototype, 'request').mockResolvedValue({
+      data: {
+        market: 'ashare',
+        category: 'kline',
+        resolved_table_id: 'ashare.kline.1d.adj.baostock',
+        total: 100,
+        page: 1,
+        page_size: 1000,
+        total_pages: 1,
+        count: 100,
+        columns: ['timestamp', 'close'],
+        data: [[1704067200000, 10.5]],
+      },
+    });
+
+    const res = await apiClient.fetchMarketData({
+      market: 'ashare',
+      category: 'kline',
+      symbols: 'sh.600000',
+      freq: '1d',
+      adj: 'adj',
+      source: 'baostock',
+    });
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.market).toBe('ashare');
+    expect(res.resolved_table_id).toBe('ashare.kline.1d.adj.baostock');
+    expect(res.table_id).toBe('ashare.kline.1d.adj.baostock');
+    expect(res.count).toBe(100);
+  });
+
   it('should create Log EventSource using /api/v1/logs/stream', () => {
     const mockEventSource = vi.fn();
     vi.stubGlobal('EventSource', mockEventSource);

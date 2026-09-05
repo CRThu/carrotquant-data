@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { DATA_SOURCE_OPTIONS, type TableDetailedMeta, type SyncStatusItem } from '../types/api';
+import React, { useState, useMemo } from 'react';
+import { DATA_SOURCE_OPTIONS, DATA_SOURCE_METAS, type TableDetailedMeta, type SyncStatusItem } from '../types/api';
 import { RefreshCw, ShieldAlert, CheckCircle2, Clock, Play, FolderOpen } from 'lucide-react';
 import { FileExplorerModal } from './FileExplorerModal';
 
@@ -23,6 +23,9 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
   onTriggerSync,
   syncing,
 }) => {
+  // 数据源筛选 Tab
+  const [activeSourceFilter, setActiveSourceFilter] = useState<string>('all');
+
   // 选中的数据表以及各表选中的格式集合
   const [selectedTables, setSelectedTables] = useState<string[]>(tables.map((t) => t.table_id));
   const [selectedFormats, setSelectedFormats] = useState<Record<string, { parquet: boolean; csv: boolean }>>(() => {
@@ -99,13 +102,36 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
     });
   };
 
+  const sourceCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: tables.length, baostock: 0, tdx: 0, stockdb: 0, eastmoney: 0, custom: 0 };
+    tables.forEach((t) => {
+      const src = t.source || 'custom';
+      if (counts[src] !== undefined) {
+        counts[src]++;
+      } else {
+        counts.custom = (counts.custom || 0) + 1;
+      }
+    });
+    return counts;
+  }, [tables]);
+
+  const filteredTables = useMemo(() => {
+    if (activeSourceFilter === 'all') return tables;
+    if (activeSourceFilter === 'custom') {
+      return tables.filter((t) => !['baostock', 'tdx', 'stockdb', 'eastmoney'].includes(t.source));
+    }
+    return tables.filter((t) => t.source === activeSourceFilter);
+  }, [tables, activeSourceFilter]);
+
   const knownTableIds = new Set(DATA_SOURCE_OPTIONS.map((opt) => opt.table_id));
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedTables(tables.filter((t) => knownTableIds.has(t.table_id)).map((t) => t.table_id));
+      const selectableIds = filteredTables.filter((t) => knownTableIds.has(t.table_id)).map((t) => t.table_id);
+      setSelectedTables((prev) => Array.from(new Set([...prev, ...selectableIds])));
     } else {
-      setSelectedTables([]);
+      const filteredSet = new Set(filteredTables.map((t) => t.table_id));
+      setSelectedTables((prev) => prev.filter((id) => !filteredSet.has(id)));
     }
   };
 
@@ -164,22 +190,59 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
     return timePart ? `${datePart} ${timePart}` : datePart;
   };
 
+  const isCurrentFilterAllSelected =
+    filteredTables.length > 0 &&
+    filteredTables.every((t) => selectedTables.includes(t.table_id));
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl flex flex-col">
       {/* 顶部固化平铺控制栏 */}
       <div className="p-4 bg-slate-950/80 border-b border-slate-800 space-y-3">
+        {/* 数据源分类 Tabs 筛选栏 */}
+        <div className="flex flex-wrap items-center gap-1.5 pb-1 border-b border-slate-800/60">
+          <button
+            onClick={() => setActiveSourceFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium cursor-pointer transition-colors ${
+              activeSourceFilter === 'all'
+                ? 'bg-cyan-950 text-cyan-300 border border-cyan-700 shadow-sm'
+                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+            }`}
+          >
+            全部数据源 <span className="ml-1 text-[10px] font-mono opacity-75">({sourceCounts.all})</span>
+          </button>
+          {Object.entries(DATA_SOURCE_METAS).map(([key, meta]) => {
+            const count = sourceCounts[key] || 0;
+            if (count === 0 && key === 'custom') return null;
+            const isActive = activeSourceFilter === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveSourceFilter(key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium cursor-pointer transition-colors flex items-center space-x-1.5 ${
+                  isActive
+                    ? 'bg-slate-800 text-slate-100 border border-slate-600 shadow-sm'
+                    : 'bg-slate-900/90 text-slate-400 hover:text-slate-200 border border-slate-800/80'
+                }`}
+              >
+                <span>{meta.name}</span>
+                <span className="text-[10px] font-mono opacity-70">({count})</span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           <button
-            onClick={() => handleSelectAll(selectedTables.length !== tables.length)}
+            onClick={() => handleSelectAll(!isCurrentFilterAllSelected)}
             className="text-xs text-slate-400 hover:text-slate-200 flex items-center space-x-1.5 cursor-pointer font-medium"
           >
             <input
               type="checkbox"
-              checked={selectedTables.length === tables.length && tables.length > 0}
+              checked={isCurrentFilterAllSelected}
               onChange={(e) => handleSelectAll(e.target.checked)}
               className="rounded bg-slate-950 border-slate-700 text-cyan-500 cursor-pointer"
             />
-            <span>全选所有数据表 ({selectedTables.length}/{tables.length})</span>
+            <span>选择当前列表全部 ({selectedTables.filter((id) => filteredTables.some((t) => t.table_id === id)).length}/{filteredTables.length})</span>
           </button>
 
           <button
@@ -243,14 +306,14 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
           <thead className="bg-slate-950/80 text-slate-400 font-semibold border-b border-slate-800">
             <tr>
               <th className="py-3 px-3 w-10 text-center">选择</th>
-              <th className="py-3 px-3 w-56">数据源 / 表 ID</th>
+              <th className="py-3 px-3 w-64">数据源 / 表 ID</th>
               <th className="py-3 px-3 min-w-[240px]">物理存储格式与数据范围</th>
               <th className="py-3 px-3 w-60">当前状态</th>
               <th className="py-3 px-3 w-36 text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
-            {tables.map((item) => {
+            {filteredTables.map((item) => {
               const isKnownTable = knownTableIds.has(item.table_id);
               const isSelected = selectedTables.includes(item.table_id);
               const isExpanded = expandedRows[item.table_id] ?? false;
@@ -262,6 +325,7 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
 
               const pqMeta = item.formats.parquet;
               const csvMeta = item.formats.csv;
+              const sourceMeta = DATA_SOURCE_METAS[item.source] || DATA_SOURCE_METAS.custom;
 
               return (
                 <React.Fragment key={item.table_id}>
@@ -280,10 +344,15 @@ export const TableManagementGrid: React.FC<TableManagementGridProps> = ({
                       />
                     </td>
 
-                    {/* 数据源与名称：零额外偏移，100% 绝对统一左对齐 */}
+                    {/* 数据源与名称：带专属徽章与规范命名 */}
                     <td className="py-2.5 px-3">
                       <div>
-                        <div className="font-bold text-slate-100 font-sans text-xs">{item.name}</div>
+                        <div className="flex items-center space-x-1.5">
+                          <span className={`text-[9px] font-sans px-1.5 py-0.5 rounded border shrink-0 ${sourceMeta.badgeClass}`}>
+                            {sourceMeta.shortName}
+                          </span>
+                          <span className="font-bold text-slate-100 font-sans text-xs">{item.name}</span>
+                        </div>
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.table_id}</div>
                       </div>
                     </td>

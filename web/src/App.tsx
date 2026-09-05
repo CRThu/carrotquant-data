@@ -132,6 +132,7 @@ export const App: React.FC = () => {
                   currentTableId={currentTableId}
                   selectedSymbol={selectedSymbol}
                   onSymbolChange={setSelectedSymbol}
+                  onTableChange={setCurrentTableId}
                   onOpenMatrix={() => setCurrentView('data_matrix')}
                   colorMode={colorMode}
                 />
