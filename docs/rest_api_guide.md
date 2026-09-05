@@ -51,7 +51,8 @@ FastAPI 路由对于包含 Polars DataFrame 切片处理与磁盘文件 IO 的�
 | | `/tables/{table_id}/schema` | `GET` | 获取某数据表的字段列名与 Polars/数据类型映射字典 |
 | | `/tables/{table_id}/row_count` | `GET` | 获取某数据表在物理存储中的记录总条数 |
 | **数据写入与导入** | `/write` | `POST` | 写入/导入自定义结构化数据，自动生成与原子化更新 `metadata.json` |
-| **数据切片查询** | `/query` | `GET` | **【HTTP GET】** 统一切片查询，按 `table_id` 自动智能路由，支持物理分页与 2D List 导出 |
+| **数据切片查询** | `/data/{market}/{category}` | `GET` | **【动态业务语义路由】** 自动识别内置访问器与外部导入表，服务端动态后复权折算 |
+| | `/query` | `GET` | **【按物理表切片】** 按 `table_id` 精确路由，支持物理分页与 2D List 导出 |
 
 | **同步任务控制** | `/sync` | `POST` | 触发后台数据全自动增量/全量同步任务 |
 | | `/tasks` | `GET` | 获取当前正在后台运行的同步任务列表 |
@@ -385,7 +386,68 @@ curl -X GET "http://127.0.0.1:8000/api/v1/query?table_id=ashare.kline.1d.raw.bao
 
 ---
 
-### 3.9 触发后台数据同步 (`POST /api/v1/sync`)
+### 3.10 通用动态业务语义切片查询 (`GET /api/v1/data/{market}/{category}`)
+
+无需感知底层具体数据源物理表名（如 `ashare.kline.1d.raw.baostock`），直接按**业务功能与语义**进行切片查询。
+- **内置表高阶特性自动激活**：若查询内置市场与分类（如 `ashare/kline`），自动在服务端激活动态后复权折算（`adj="adj"`）与静态表优先直读；
+- **外部导入表全自动动态路由**：若查询用户自定义导入的数据集（如 `crypto/kline`、`custom/factors`），系统自动模糊检索本地已存在的物理表进行切片读取，**0 行后端代码修改**即可自动接入新表；
+- **输出契约无缝对齐**：输出与 `/query` 相同的高性能 2D Matrix，便于前端与图表组件无缝消费。
+
+#### 请求路径参数 (Path Parameters)
+| 参数名 | 类型 | 说明 | 示例 |
+| :--- | :--- | :--- | :--- |
+| `market` | String | 资产市场或大类标识 | `ashare` (A股), `aetf` (场内基金), `aindex` (指数), 或自定义市场 `crypto` |
+| `category` | String | 数据分类或表类型 | `kline` (行情), `concept` (概念), `industry` (行业), `dragon_tiger` (龙虎榜), 或自定义 `factors` |
+
+#### 请求查询参数 (Query Parameters)
+| 参数名 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `symbols` | String | `None` | 证券代码过滤，多个代码以逗号分隔 (如 `sh.600000,sz.000001`) |
+| `board_code` | String | `None` | 板块代码过滤 (如 `BK0612`，精确定向获取板块成分股) |
+| `freq` | String | `"1d"` | K 线频率，支持 `1d`, `5m`, `1m` (仅对 `kline` 生效) |
+| `adj` | String | `"raw"` | 复权模式，支持 `raw` (不复权) 或 `adj` (后复权，自动享受服务端动态因子折算) |
+| `start_date` | String | `None` | 起始日期过滤 (`YYYY-MM-DD`) |
+| `end_date` | String | `None` | 结束日期过滤 (`YYYY-MM-DD`) |
+| `columns` | String | `None` | 选挑字段清单，逗号分隔 (如 `timestamp,symbol,close`) |
+| `source` | String | `None` | 指定底层数据源驱动 (如 `tdx`, `baostock`, `stockdb`)，未传则走表内置默认源 |
+| `format` | String | `"auto"` | 存储格式 (`auto`, `parquet`, `csv`) |
+| `page` | Integer | `1` | 当前页码 (从 1 开始) |
+| `page_size` | Integer | `5000` | 每页记录数 |
+
+#### 响应 JSON 结构示例
+```json
+{
+  "market": "ashare",
+  "category": "kline",
+  "resolved_table_id": "ashare.kline.1d.adj.baostock",
+  "total": 12500,
+  "page": 1,
+  "page_size": 5000,
+  "total_pages": 3,
+  "count": 5000,
+  "columns": ["timestamp", "datetime", "symbol", "open", "high", "low", "close", "volume"],
+  "data": [
+    [1704092400000, "2024-01-01T15:00:00.000+08:00", "sh.600000", 6.62, 6.68, 6.61, 6.65, 12500000.0],
+    [1704178800000, "2024-01-02T15:00:00.000+08:00", "sh.600000", 6.65, 6.72, 6.64, 6.70, 15000000.0]
+  ]
+}
+```
+
+#### cURL 调用示例
+```bash
+# 1. 语义化获取 A 股日线后复权数据 (自动服务端折算复权)
+curl -X GET "http://127.0.0.1:8000/api/v1/data/ashare/kline?symbols=sh.600000&freq=1d&adj=adj"
+
+# 2. 定向获取特定概念板块的成分股
+curl -X GET "http://127.0.0.1:8000/api/v1/data/ashare/concept?board_code=BK0612"
+
+# 3. 动态访问外部导入的自定义加密货币 K 线表
+curl -X GET "http://127.0.0.1:8000/api/v1/data/crypto/kline?symbols=BTC.USDT&source=binance"
+```
+
+---
+
+### 3.11 触发后台数据同步 (`POST /api/v1/sync`)
 
 #### 请求 Body (JSON)
 ```json
@@ -418,7 +480,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/sync" \
 
 ---
 
-### 3.10 查询活跃同步任务 (`GET /api/v1/tasks`)
+### 3.12 查询活跃同步任务 (`GET /api/v1/tasks`)
 
 #### 响应 JSON 结构示例
 ```json

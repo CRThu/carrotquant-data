@@ -147,15 +147,34 @@ class AShareConcept(_BaseTable):
     def get(
         self,
         symbols: Optional[Union[str, List[str]]] = None,
+        board_code: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         columns: Optional[Union[str, List[str]]] = None,
         source: Optional[str] = None,
         format: Optional[str] = None
     ) -> pl.DataFrame:
+        """
+        读取 A 股概念板块成分股数据。
+
+        Args:
+            symbols: 股票代码或代码列表 (例如 'sh.600000')
+            board_code: 板块代码 (例如 'BK0612')，用于精确定向过滤该板块成分股
+            start_date: 起始日期 ('YYYY-MM-DD')
+            end_date: 结束日期 ('YYYY-MM-DD')
+            columns: 选挑字段列表
+            source: 指定数据源 ('eastmoney', 'stockdb' 等)
+            format: 存储格式 ('parquet', 'csv', 'auto')
+
+        Returns:
+            pl.DataFrame
+        """
         resolved_source, resolved_format = self._resolve_source_format(source, format)
         table_id = f"{self._PREFIX}.{resolved_source}"
-        return self._read_table(table_id, symbols, start_date, end_date, columns, resolved_format)
+        df = self._read_table(table_id, symbols, start_date, end_date, columns, resolved_format)
+        if board_code and "board_code" in df.columns:
+            df = df.filter(pl.col("board_code") == board_code.strip())
+        return df
 
 
 class AShareIndustry(_BaseTable):
@@ -166,15 +185,34 @@ class AShareIndustry(_BaseTable):
     def get(
         self,
         symbols: Optional[Union[str, List[str]]] = None,
+        board_code: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         columns: Optional[Union[str, List[str]]] = None,
         source: Optional[str] = None,
         format: Optional[str] = None
     ) -> pl.DataFrame:
+        """
+        读取 A 股行业板块成分股数据。
+
+        Args:
+            symbols: 股票代码或代码列表 (例如 'sh.600000')
+            board_code: 板块代码 (例如 'BK0475')，用于精确定向过滤该板块成分股
+            start_date: 起始日期 ('YYYY-MM-DD')
+            end_date: 结束日期 ('YYYY-MM-DD')
+            columns: 选挑字段列表
+            source: 指定数据源 ('eastmoney', 'stockdb' 等)
+            format: 存储格式 ('parquet', 'csv', 'auto')
+
+        Returns:
+            pl.DataFrame
+        """
         resolved_source, resolved_format = self._resolve_source_format(source, format)
         table_id = f"{self._PREFIX}.{resolved_source}"
-        return self._read_table(table_id, symbols, start_date, end_date, columns, resolved_format)
+        df = self._read_table(table_id, symbols, start_date, end_date, columns, resolved_format)
+        if board_code and "board_code" in df.columns:
+            df = df.filter(pl.col("board_code") == board_code.strip())
+        return df
 
 
 class AShareDragonTiger(_BaseTable):

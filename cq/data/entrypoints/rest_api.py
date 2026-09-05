@@ -9,12 +9,13 @@ FastAPI RESTful HTTP API 接入面模块。
 import math
 import json
 import asyncio
+import inspect
 import importlib.resources
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
 import polars as pl
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request, Path as FastApiPath
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -37,7 +38,12 @@ from cq.data.entrypoints.python_api import (
     sync,
     list_sources
 )
+from cq.data.entrypoints import accessors
+from cq.data.provider.provider_manager import ProviderManager
 from cq.data.provider.tdx_downloader import download_and_extract
+from cq.data.provider.tdx_utils import discover_tdx_symbols_from_local
+from cq.data.service.metadata_manager import MetadataManager
+from cq.data.service.sync_tracker import sync_tracker
 
 
 class SPAStaticFiles(StaticFiles):
@@ -169,10 +175,6 @@ def run_sync_task(
     finally:
         ACTIVE_SYNC_TASKS.remove(table_id)
 
-
-import json
-from cq.data.service.metadata_manager import MetadataManager
-from cq.data.service.sync_tracker import sync_tracker
 
 # 所有支持的标准 Table ID 预定义字典与元数据映射 (全量 16 个内置数据表)
 KNOWN_TABLE_DEFINITIONS = [
@@ -373,7 +375,6 @@ def api_list_sources():
     包含内置数据源 ('baostock', 'eastmoney', 'tdx', 'stockdb') 与动态注册的自定义源。
     """
     try:
-        from cq.data.provider.provider_manager import ProviderManager
         pm = ProviderManager()
         sources = list_sources()
         result = []
@@ -611,6 +612,138 @@ def api_query(
         handle_endpoint_exception(e, "GET query")
 
 
+@app.get("/api/v1/data/{market}/{category}")
+def api_dynamic_market_data(
+    market: str = FastApiPath(..., description="资产市场或大类标识 (如 ashare, aetf, aindex 或自定义市场)"),
+    category: str = FastApiPath(..., description="数据分类或表类型 (如 kline, concept, industry, dragon_tiger, adj_factor)"),
+    symbols: Optional[str] = Query(None, description="证券代码或逗号分隔的代码列表 (如 sh.600000,sz.000001)"),
+    board_code: Optional[str] = Query(None, description="板块代码 (如 BK0612) 用于精确定向获取板块成分股"),
+    freq: str = Query("1d", description="K 线频率，支持 1d, 5m, 1m (仅对 kline 生效)"),
+    adj: str = Query("raw", description="复权模式，支持 raw (不复权) 或 adj (后复权，自动享受服务端动态折算)"),
+    start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    columns: Optional[str] = Query(None, description="选挑字段清单，以逗号分隔 (如 timestamp,close,volume)"),
+    source: Optional[str] = Query(None, description="指定底层数据源驱动 (未传则使用表内置默认源)"),
+    format: str = Query("auto", description="存储格式 (auto, parquet, csv)"),
+    page: int = Query(1, ge=1, description="当前页码 (从1开始)"),
+    page_size: int = Query(5000, ge=1, description="每页记录数")
+):
+    """
+    通用动态业务语义数据切片查询接口：
+    - 自动识别并路由内置高阶访问器 (如 cq.data.ashare.kline)，全自动在服务端执行动态后复权与静态表优先直读；
+    - 未命中访问器时，自动在本地已持久化数据表中模糊检索匹配，原生支持外部导入/自定义数据表 (如 crypto.kline, custom.factors)；
+    - 输出统一的 2D 矩阵与分页元数据，与前端及第三方系统完全兼容。
+    """
+    try:
+        parsed_symbols = parse_comma_param(symbols)
+        parsed_columns = parse_comma_param(columns)
+
+        mkt_name = market.strip().lower()
+        cat_name = category.strip().lower()
+
+        mkt_obj = getattr(accessors, mkt_name, None)
+        resolved_table_id: Optional[str] = None
+        df: Optional[pl.DataFrame] = None
+
+        # 1. 优先尝试命中 Python OOP 访问器 (享用服务端动态复权折算与同源因子探测能力)
+        if mkt_obj is not None and hasattr(mkt_obj, cat_name):
+            tbl_accessor = getattr(mkt_obj, cat_name)
+            if hasattr(tbl_accessor, "get") and callable(tbl_accessor.get):
+                candidate_args = {
+                    "symbols": parsed_symbols,
+                    "board_code": board_code,
+                    "freq": freq,
+                    "adj": adj,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "columns": parsed_columns,
+                    "format": format,
+                }
+                if source is not None:
+                    candidate_args["source"] = source
+
+                real_func = getattr(type(tbl_accessor), "get", tbl_accessor.get)
+                try:
+                    sig = inspect.signature(real_func)
+                except Exception:
+                    sig = inspect.signature(tbl_accessor.get)
+
+                has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if has_var_kw:
+                    call_args = candidate_args
+                else:
+                    call_args = {k: v for k, v in candidate_args.items() if k in sig.parameters}
+                df = tbl_accessor.get(**call_args)
+
+                prefix = getattr(tbl_accessor, "_PREFIX", f"{mkt_name}.{cat_name}")
+                eff_source = source or getattr(tbl_accessor, "source", "unknown")
+                if cat_name == "kline":
+                    eff_adj = adj if ("adj" in sig.parameters) else "raw"
+                    resolved_table_id = f"{prefix}.{freq}.{eff_adj}.{eff_source}"
+                else:
+                    resolved_table_id = f"{prefix}.{eff_source}"
+
+        # 2. 若未命中访问器，在本地物理存储的 list_tables() 中进行检索与动态路由 (支持外部导入表)
+        if df is None:
+            tables = list_tables(format=format)
+            prefix = f"{mkt_name}.{cat_name}"
+            candidates = [t["table_id"] for t in tables if t["table_id"].startswith(prefix)]
+
+            if not candidates:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Resource not found: no table matching market='{mkt_name}', category='{cat_name}'"
+                )
+
+            filtered = candidates
+            if source:
+                source_filtered = [c for c in filtered if c.endswith(f".{source}")]
+                if source_filtered:
+                    filtered = source_filtered
+
+            if cat_name == "kline" and len(filtered) > 1:
+                freq_filtered = [c for c in filtered if f".{freq}." in c or c.endswith(f".{freq}")]
+                if freq_filtered:
+                    filtered = freq_filtered
+                adj_filtered = [c for c in filtered if f".{adj}." in c]
+                if adj_filtered:
+                    filtered = adj_filtered
+
+            resolved_table_id = filtered[0]
+            df = read(
+                table_id=resolved_table_id,
+                symbols=parsed_symbols,
+                start_date=start_date,
+                end_date=end_date,
+                columns=parsed_columns,
+                format=format
+            )
+
+        # 板块成分股定向过滤 (若包含 board_code)
+        if board_code and "board_code" in df.columns:
+            df = df.filter(pl.col("board_code") == board_code.strip())
+
+        total = df.height
+        total_pages = math.ceil(total / page_size) if total > 0 else 0
+        offset = (page - 1) * page_size
+        sliced_df = df.slice(offset, page_size) if not df.is_empty() else df
+
+        return {
+            "market": mkt_name,
+            "category": cat_name,
+            "resolved_table_id": resolved_table_id,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "count": sliced_df.height,
+            "columns": sliced_df.columns,
+            "data": sliced_df.rows() if not sliced_df.is_empty() else []
+        }
+    except Exception as e:
+        handle_endpoint_exception(e, f"GET dynamic data for {market}.{category}")
+
+
 @app.post("/api/v1/write")
 def api_write_data(request: TableWriteRequest):
 
@@ -736,7 +869,6 @@ def api_tdx_check(vipdoc_dir: str = Query(r"C:\new_tdx\vipdoc", description="通
     """检查通达信 vipdoc 路径物理状态与包含的代码数量"""
     try:
         path = Path(vipdoc_dir)
-        from cq.data.provider.tdx_utils import discover_tdx_symbols_from_local
         symbols = discover_tdx_symbols_from_local(path) if path.exists() else []
         return {
             "path": str(path),

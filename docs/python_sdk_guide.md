@@ -171,13 +171,25 @@ df = cq.data.ashare.adj_factor.get(
 读取 A 股概念板块成分股、行业板块成分股、龙虎榜统计与机构交易数据。
 
 ```python
-df_concept = cq.data.ashare.concept.get(symbols=None, start_date=None, end_date=None, columns=None)
-df_industry = cq.data.ashare.industry.get(symbols=None, start_date=None, end_date=None, columns=None)
+# 概念与行业板块支持按 board_code 定向过滤成分股 (如 BK0612 低空经济)
+df_concept = cq.data.ashare.concept.get(board_code="BK0612")
+df_industry = cq.data.ashare.industry.get(board_code="BK0420")
+
+# 亦支持按个股反查其归属的全部板块
+df_stock_concepts = cq.data.ashare.concept.get(symbols="sh.600000")
+
+# 龙虎榜与机构交易明细
 df_lhb = cq.data.ashare.dragon_tiger.get(symbols=None, start_date=None, end_date=None, columns=None)
 df_inst = cq.data.ashare.inst_trade.get(symbols=None, start_date=None, end_date=None, columns=None)
 ```
 
-- **参数说明 (Args)**: 同上。
+- **参数说明 (Args)**:
+  - `symbols`: 证券代码或代码列表 (如 `"sh.600000"`)
+  - `board_code`: 板块代码 (如 `"BK0612"`)，用于精确定向过滤板块成分股 (仅概念与行业板块支持)
+  - `start_date` / `end_date`: 起止日期 (`"YYYY-MM-DD"`)
+  - `columns`: 字段投影清单
+  - `source`: 指定数据源驱动 (如 `"eastmoney"`, `"stockdb"`)
+  - `format`: 指定存储格式 (`"parquet"`, `"csv"`, `"auto"`)
 - **返回值 (Returns)**: `pl.DataFrame`
 
 ---
@@ -543,8 +555,8 @@ df_kline = cq.data.ashare.kline.get(
 )
 print(df_kline)
 
-# 读取概念板块成分股
-df_concept = cq.data.ashare.concept.get()
+# 读取概念板块成分股 (支持 board_code 定向过滤或全量读取)
+df_concept = cq.data.ashare.concept.get(board_code="BK0612")
 print(df_concept)
 ```
 

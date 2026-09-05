@@ -103,3 +103,16 @@ def test_rest_api_full_flow_with_physical_storage(temp_data_dir, monkeypatch):
     assert data_f["columns"] == ["timestamp", "symbol", "close"]
     for row in data_f["data"]:
         assert row[1] == "sh.600000"
+
+    # 5. 验证通用动态业务语义端点 GET /api/v1/data/ashare/kline
+    dynamic_url = "/api/v1/data/ashare/kline?symbols=sh.600000&freq=1d&adj=raw&columns=timestamp,symbol,close"
+    resp_dyn = client.get(dynamic_url)
+    assert resp_dyn.status_code == 200
+    dyn_data = resp_dyn.json()
+    assert dyn_data["market"] == "ashare"
+    assert dyn_data["category"] == "kline"
+    assert dyn_data["resolved_table_id"] == "ashare.kline.1d.raw.baostock"
+    assert dyn_data["total"] == 2
+    assert dyn_data["count"] == 2
+    assert dyn_data["columns"] == ["timestamp", "symbol", "close"]
+

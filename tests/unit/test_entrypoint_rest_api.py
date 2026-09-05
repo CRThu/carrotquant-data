@@ -310,3 +310,116 @@ def test_list_sources():
         assert [item["source"] for item in data["sources"]] == ["baostock", "eastmoney", "tdx", "stockdb"]
 
 
+def test_dynamic_market_data_built_in_kline_with_adj():
+    """测试通用动态路由 GET /api/v1/data/ashare/kline 享用服务端后复权与分页"""
+    mock_df = pl.DataFrame({
+        "timestamp": [1704067200000, 1704153600000],
+        "symbol": ["sh.600000", "sh.600000"],
+        "open": [10.0, 10.5],
+        "close": [10.5, 11.0],
+        "volume": [1000, 1200]
+    })
+    import cq.data
+    with patch.object(cq.data.ashare.kline, "get", return_value=mock_df) as mock_get:
+        response = client.get(
+            "/api/v1/data/ashare/kline",
+            params={"symbols": "sh.600000", "freq": "1d", "adj": "adj", "source": "tdx"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["market"] == "ashare"
+        assert data["category"] == "kline"
+        assert data["resolved_table_id"] == "ashare.kline.1d.adj.tdx"
+        assert data["total"] == 2
+        assert data["count"] == 2
+        assert data["columns"] == ["timestamp", "symbol", "open", "close", "volume"]
+        assert len(data["data"]) == 2
+
+        # 验证调用入参正确传递到 AShareKline.get
+        mock_get.assert_called_once()
+        _, kwargs = mock_get.call_args
+        assert kwargs["symbols"] == ["sh.600000"]
+        assert kwargs["freq"] == "1d"
+        assert kwargs["adj"] == "adj"
+        assert kwargs["source"] == "tdx"
+
+
+def test_dynamic_market_data_built_in_concept_with_board_code():
+    """测试通用动态路由 GET /api/v1/data/ashare/concept 配合 board_code 过滤"""
+    mock_df = pl.DataFrame({
+        "symbol": ["sh.600000", "sz.000001", "sh.600036"],
+        "board_code": ["BK0612", "BK0999", "BK0612"],
+        "board_name": ["低空经济", "人工智能", "低空经济"]
+    })
+    import cq.data
+    with patch.object(cq.data.ashare.concept, "get", return_value=mock_df):
+        response = client.get(
+            "/api/v1/data/ashare/concept",
+            params={"board_code": "BK0612"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["market"] == "ashare"
+        assert data["category"] == "concept"
+        assert data["total"] == 2  # 过滤后只有 2 行
+        assert data["count"] == 2
+
+
+def test_dynamic_market_data_custom_imported_table():
+    """测试通用动态路由未命中内置访问器时，自动模糊匹配外部导入表"""
+    mock_tables = [{"table_id": "crypto.kline.1d.raw.binance", "category": "timeseries"}]
+    mock_df = pl.DataFrame({
+        "timestamp": [1704067200000],
+        "symbol": ["BTC.USDT"],
+        "close": [42500.0]
+    })
+    with patch("cq.data.entrypoints.rest_api.list_tables", return_value=mock_tables), \
+         patch("cq.data.entrypoints.rest_api.read", return_value=mock_df):
+        response = client.get(
+            "/api/v1/data/crypto/kline",
+            params={"source": "binance", "symbols": "BTC.USDT"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["market"] == "crypto"
+        assert data["category"] == "kline"
+        assert data["resolved_table_id"] == "crypto.kline.1d.raw.binance"
+        assert data["total"] == 1
+        assert data["columns"] == ["timestamp", "symbol", "close"]
+
+
+def test_dynamic_market_data_not_found_raises_404():
+    """测试通用动态路由请求不存在的表时抛出 404"""
+    with patch("cq.data.entrypoints.rest_api.list_tables", return_value=[]):
+        response = client.get("/api/v1/data/nonexistent/category")
+        assert response.status_code == 404
+        assert "Resource not found" in response.json()["detail"]
+
+
+def test_dynamic_market_data_aindex_kline_handles_adj_safely():
+    """测试请求 aindex/kline 即使传入 adj=adj 也安全解析为 raw 且调用 AIndexKline.get()"""
+    mock_df = pl.DataFrame({
+        "timestamp": [1704067200000],
+        "symbol": ["sh.000001"],
+        "close": [3000.0]
+    })
+    import cq.data
+    with patch.object(cq.data.aindex.kline, "get", return_value=mock_df) as mock_get:
+        response = client.get(
+            "/api/v1/data/aindex/kline",
+            params={"symbols": "sh.000001", "adj": "adj"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["market"] == "aindex"
+        assert data["category"] == "kline"
+        # 确认 resolved_table_id 为 raw，不会产生虚假的 .adj.
+        assert data["resolved_table_id"] == "aindex.kline.1d.raw.baostock"
+        # 确认传给 AIndexKline.get 的参数中不包含 adj
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args[1]
+        assert "adj" not in call_kwargs
+
+
+
+
