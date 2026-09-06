@@ -693,9 +693,10 @@ def test_parquet_finalize_anti_join_overwrite_and_progress_callback(tmp_path: Pa
     # 3. 执行 finalize(mode="append")，带 progress_callback
     storage.finalize(table_id, mode="append", progress_callback=record_progress)
 
-    # 验证 progress_callback 被触发
+    # 验证 progress_callback 被触发 (TS 模式分桶进度 1/1)
     assert len(progress_records) == 1
-    assert progress_records[0] == ("year=2025", 1, 1)
+    assert progress_records[0][1:] == (1, 1)
+    assert "year=2025" in progress_records[0][0]
 
     # 4. 验证合并后结果
     res = pl.read_parquet(tmp_path / table_id / "year=2025" / "data.parquet")

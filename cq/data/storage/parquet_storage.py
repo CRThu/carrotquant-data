@@ -1,3 +1,4 @@
+import gc
 import os
 import shutil
 import threading
@@ -9,6 +10,7 @@ from loguru import logger
 import polars as pl
 from .base import StorageManager
 from ..service.metadata_manager import MetadataManager
+
 
 class ParquetStorage(StorageManager):
     """
@@ -150,6 +152,8 @@ class ParquetStorage(StorageManager):
             )
             for (year,), group_df in df.partition_by(["_year"], as_dict=True).items():
                 patch_df = group_df.drop("_year")
+                if "symbol" in patch_df.columns and "timestamp" in patch_df.columns:
+                    patch_df = patch_df.unique(subset=["symbol", "timestamp"], keep="last").sort(["symbol", "timestamp"])
                 stage_dir = self._get_staging_dir(table_id, year)
                 stage_dir.mkdir(parents=True, exist_ok=True)
                 part_path = stage_dir / f"part_{uuid.uuid4().hex}.parquet"
@@ -233,6 +237,8 @@ class ParquetStorage(StorageManager):
                         q = q.sort(sort_keys)
                     q.sink_parquet(tmp_path)
                     os.replace(tmp_path, target_path)
+                    del q, new_lazy, lazy_stages
+                    gc.collect()
                 shutil.rmtree(flat_staging, ignore_errors=True)
 
             # 2. 检查各 Hive 分区目录下的暂存目录
@@ -245,6 +251,7 @@ class ParquetStorage(StorageManager):
                 if yd.is_dir() and (yd / ".staging").exists() and list((yd / ".staging").glob("*.parquet"))
             ]
             total_years = len(year_dirs)
+            is_ts = self.category == "timeseries"
 
             for idx, year_dir in enumerate(year_dirs, start=1):
                 year_name = year_dir.name
@@ -254,7 +261,7 @@ class ParquetStorage(StorageManager):
                     shutil.rmtree(stage_dir, ignore_errors=True)
                     continue
 
-                if progress_callback:
+                if not is_ts and progress_callback:
                     progress_callback(year_name, idx, total_years)
 
                 logger.info(f"[*] [收敛落盘] 正在合并 {table_id} {year_name} (分片数: {len(staging_files)}, 进度: {idx}/{total_years})...")
@@ -266,36 +273,104 @@ class ParquetStorage(StorageManager):
                 tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
 
                 base_schema = lazy_stages[0].collect_schema()
-                all_new = [ls.cast(base_schema) for ls in lazy_stages]
-                new_lazy = pl.concat(all_new)
-
-                is_ts = self.category == "timeseries"
 
                 if is_ts:
-                    # TS 模式：基于 [symbol, timestamp] 对新分片构建 Anti-Join 流式剔除旧数据冲突行，再流式排序落盘 (O(新分片) 极低内存开销，keep="last" 语义)
                     col_order = list(base_schema.names())
-                    # 新分片自身去重 (杜绝并发/重试写入分片主键重复)
-                    new_unique = new_lazy.unique(subset=["symbol", "timestamp"], keep="last")
+                    has_old = mode == "append" and target_path.exists()
 
-                    if mode == "append" and target_path.exists():
-                        lazy_old = pl.scan_parquet(target_path)
-                        valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
-                        col_order = [c for c in base_schema.names() if c in valid_schema]
-                        lazy_old = lazy_old.cast(valid_schema).select(col_order)
+                    # 1. 单一内核：提取所有涉及的证券代码 (新分片 + 旧大表) 并严格升序排序
+                    staging_scans = [pl.scan_parquet(f).select("symbol") for f in staging_files]
+                    if has_old:
+                        staging_scans.append(pl.scan_parquet(target_path).select("symbol"))
+                    all_symbols = (
+                        pl.concat(staging_scans)
+                        .unique()
+                        .collect()["symbol"]
+                        .sort()
+                        .to_list()
+                    )
+                    del staging_scans
+                    gc.collect()
 
-                        # 基于 [symbol, timestamp] 执行 Anti-Join，流式剔除被新数据覆盖的重复键 (O(新分片) 极低内存开销，keep="last" 语义)
-                        clean_old = lazy_old.join(
-                            new_unique.select(["symbol", "timestamp"]),
-                            on=["symbol", "timestamp"],
-                            how="anti",
-                        )
-                        all_sources = [clean_old, new_unique.select(col_order)]
-                    else:
-                        all_sources = [new_unique.select(col_order)]
+                    # 2. 分桶保序流式归并 (每桶处理 100 个代码，内存恒定 ~250MB，新盖旧 keep="last"，绝对保序)
+                    chunk_size = 100
+                    total_chunks = (len(all_symbols) + chunk_size - 1) // chunk_size
+                    chunk_dir = year_dir / f".merge_chunks_{uuid.uuid4().hex[:8]}"
+                    chunk_dir.mkdir(parents=True, exist_ok=True)
+                    chunk_files = []
 
-                    q = pl.concat(all_sources).sort(["symbol", "timestamp"])
+                    logger.info(f"[*] [收敛落盘] {table_id} {year_name} 涉及标的共 {len(all_symbols)} 个，拆解为 {total_chunks} 个分桶流式归并 (每桶 {chunk_size} 标的)...")
+
+                    try:
+                        if has_old:
+                            lazy_old_sample = pl.scan_parquet(target_path)
+                            valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old_sample.collect_schema().names()}
+                            col_order_old = [c for c in base_schema.names() if c in valid_schema]
+                            del lazy_old_sample
+
+                        for c_idx in range(0, len(all_symbols), chunk_size):
+                            chunk_num = c_idx // chunk_size + 1
+                            chunk_syms = all_symbols[c_idx:c_idx + chunk_size]
+                            stage_msg = f"{year_name} [{chunk_syms[0]} ~ {chunk_syms[-1]}]"
+                            if progress_callback:
+                                progress_callback(stage_msg, chunk_num, total_chunks)
+                            logger.info(f"[*] [收敛落盘] {table_id} 正在处理 {stage_msg} ({chunk_num}/{total_chunks})...")
+
+                            # 独立按桶构建计算图，避免全局共享 LazyFrame 导致底层 Rust 内存池无限累积
+                            new_chunks = [
+                                pl.scan_parquet(f).cast(base_schema).select(col_order).filter(pl.col("symbol").is_in(chunk_syms))
+                                for f in staging_files
+                            ]
+                            new_chunk = pl.concat(new_chunks)
+
+                            if has_old:
+                                old_chunk = (
+                                    pl.scan_parquet(target_path)
+                                    .cast(valid_schema)
+                                    .select(col_order_old)
+                                    .filter(pl.col("symbol").is_in(chunk_syms))
+                                )
+                                clean_old_chunk = old_chunk.join(
+                                    new_chunk.select(["symbol", "timestamp"]),
+                                    on=["symbol", "timestamp"],
+                                    how="anti",
+                                )
+                                sources = [clean_old_chunk, new_chunk]
+                            else:
+                                sources = [new_chunk]
+
+                            merged_chunk = (
+                                pl.concat(sources)
+                                .unique(subset=["symbol", "timestamp"], keep="last")
+                                .sort(["symbol", "timestamp"])
+                            )
+                            part_file = chunk_dir / f"chunk_{c_idx:06d}.parquet"
+                            merged_chunk.sink_parquet(part_file)
+                            if part_file.exists() and part_file.stat().st_size > 0:
+                                chunk_files.append(part_file)
+                                file_mb = part_file.stat().st_size / 1024 / 1024
+                                logger.info(f"[+] [收敛落盘] {table_id} {stage_msg} 暂存完成 ({file_mb:.2f} MB)")
+
+                            # 关键：彻底解除每桶所有引用并即刻进行底层内存修剪与物理页归还
+                            del new_chunks, new_chunk, sources, merged_chunk
+                            if has_old:
+                                del old_chunk, clean_old_chunk
+                            gc.collect()
+
+                        # 各分桶代码单调递增且内部严格有序，流式直写收敛落盘
+                        logger.info(f"[*] [收敛落盘] {table_id} {year_name} 所有分桶 ({total_chunks}/{total_chunks}) 处理完毕，正在流式合成最终大表...")
+                        if chunk_files:
+                            pl.concat([pl.scan_parquet(cf) for cf in chunk_files]).sink_parquet(tmp_path)
+                        else:
+                            pl.DataFrame(schema=base_schema).write_parquet(tmp_path)
+                        gc.collect()
+                    finally:
+                        shutil.rmtree(chunk_dir, ignore_errors=True)
+                        gc.collect()
                 else:
                     # EV 模式：遵循协议契约执行全行去重 (subset=None)
+                    all_new = [ls.cast(base_schema) for ls in lazy_stages]
+                    new_lazy = pl.concat(all_new)
                     if mode == "append" and target_path.exists():
                         lazy_old = pl.scan_parquet(target_path)
                         valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
@@ -310,15 +385,14 @@ class ParquetStorage(StorageManager):
                     elif "timestamp" in q.collect_schema().names():
                         q = q.sort(["timestamp"])
 
-                q.sink_parquet(tmp_path)
+                    q.sink_parquet(tmp_path)
+                    del q, new_lazy
+
                 os.replace(tmp_path, target_path)
                 shutil.rmtree(stage_dir, ignore_errors=True)
 
-                # 显式清理 LazyFrame 引用并强制垃圾回收，防止跨年份连续流式处理内存叠加
-                del q, new_lazy, lazy_stages
-                if is_ts:
-                    del all_sources, new_unique
-                import gc
+                # 显式清理引用并强制垃圾回收
+                del lazy_stages
                 gc.collect()
 
                 logger.info(f"[+] [收敛落盘] 完成 {table_id} {year_name} 合并落盘, 耗时: {time.time() - t_start:.2f}s")
@@ -338,6 +412,8 @@ class ParquetStorage(StorageManager):
                     stage_dir = year_dir / ".staging"
                     if stage_dir.exists():
                         shutil.rmtree(stage_dir, ignore_errors=True)
+                    for chunk_dir in year_dir.glob(".merge_chunks_*"):
+                        shutil.rmtree(chunk_dir, ignore_errors=True)
 
     def get_all_symbols(self, table_id: str) -> list[str]:
         """扫描所有 parquet 文件，提取唯一证券代码"""
