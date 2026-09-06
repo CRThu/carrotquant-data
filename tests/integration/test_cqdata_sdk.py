@@ -32,6 +32,7 @@ def mock_sdk_env(temp_data_dir):
 
     pq_ts = StorageFactory.get_storage("parquet", str(temp_data_dir), "timeseries")
     pq_ts.write_series(ts_table, df_ts)
+    pq_ts.finalize(ts_table)
 
     meta_mgr = MetadataManager(str(temp_data_dir))
     meta_mgr.save(ts_table, "parquet", {

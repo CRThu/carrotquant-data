@@ -39,6 +39,7 @@ def test_rest_api_full_flow_with_physical_storage(temp_data_dir, monkeypatch):
 
     storage = StorageFactory.get_storage(storage_format=fmt, data_dir=str(temp_data_dir), category="timeseries")
     storage.write_series(table_id, df)
+    storage.finalize(table_id)
 
     meta_mgr = MetadataManager(str(temp_data_dir))
     meta_mgr.save(

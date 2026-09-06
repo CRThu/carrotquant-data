@@ -5,7 +5,7 @@ from pathlib import Path
 from .task_planner import TaskPlanner
 from ..provider.provider_manager import ProviderManager
 from .metadata_manager import MetadataManager
-from ..utils.time_utils import ts_to_iso
+from ..utils.time_utils import ts_to_iso, ts_to_str
 from ..storage.storage_factory import StorageFactory
 from ..config.settings import settings
 from .sync_tracker import sync_tracker
@@ -44,7 +44,8 @@ class SyncManager:
         if isinstance(formats, str):
             formats = [formats]
 
-        logger.info(f"[*] Starting orchestrated sync for {table_ids} into {formats} (batch_size={batch_size}, force_refresh={force_refresh}, symbol_limit={symbol_limit})...")
+        time_info = f"range=[{start_date or 'epoch_start'} -> {end_date or 'latest_now'}]"
+        logger.info(f"[*] Starting orchestrated sync for {table_ids} into {formats} ({time_info}, batch_size={batch_size}, force_refresh={force_refresh}, symbol_limit={symbol_limit})...")
 
         for table_id in table_ids:
             self._sync_single_table(table_id, formats, start_date, end_date, force_refresh, batch_size, symbol_limit, provider_kwargs)
@@ -63,6 +64,7 @@ class SyncManager:
             symbol_limit: 限制同步的证券数量 (常用于生成测试数据)
         """
         sync_tracker.start_task(table_id, message=f"正在准备同步 {table_id}...")
+        storages = {}
 
         try:
             # 1. 获取驱动
@@ -70,10 +72,11 @@ class SyncManager:
             # 获取类别
             category = provider.get_table_category(table_id)
             
-            # 2. 获取所有目标存储引擎
+            # 2. 获取所有目标存储引擎并重置未提交暂存
             storages = {fmt: StorageFactory.get_storage(fmt, self.data_dir, category=category) for fmt in formats}
             for storage in storages.values():
                 storage.category = category
+                storage.cleanup(table_id)
             
             # 3. 自动发现全量代码
             symbols = provider.get_all_symbols(table_id)
@@ -87,8 +90,14 @@ class SyncManager:
             sync_tracker.update_progress(table_id, current=0, total=len(symbols), message=f"正在规划 {len(symbols)} 个代码的数据水位线...")
             tasks = self.planner.plan(table_id, formats, symbols, start_date, end_date, force_refresh=force_refresh)
             total_tasks = len(tasks)
-            sync_tracker.update_progress(table_id, current=0, total=total_tasks, message=f"规划完成: 需补全 {total_tasks} 个代码")
-            logger.info(f"[*] Task planning finished for {table_id}. {total_tasks}/{len(symbols)} symbols need to be patched.")
+            if tasks:
+                start_ts_min = min(t['start'] for t in tasks)
+                end_ts_max = max(t['end'] for t in tasks)
+                time_range_desc = f"[{ts_to_str(start_ts_min)} -> {ts_to_str(end_ts_max)}]"
+            else:
+                time_range_desc = "None (本地已是最新)"
+            sync_tracker.update_progress(table_id, current=0, total=total_tasks, message=f"规划完成: 需补全 {total_tasks} 个代码 {time_range_desc}")
+            logger.info(f"[*] Task planning finished for {table_id}. {total_tasks}/{len(symbols)} symbols need to be patched. Time range: {time_range_desc}")
             
             # 5. 执行采集与落地循环
             last_success_df = None
@@ -109,9 +118,11 @@ class SyncManager:
                     
                     # 实时进度 Log 与 命令行动态提示信息更新
                     current_idx = batch_idx + j + 1
-                    msg_text = f"正在抓取 {symbol} ({current_idx}/{total_tasks})"
+                    s_str = ts_to_str(start_ts)
+                    e_str = ts_to_str(end_ts)
+                    msg_text = f"正在抓取 {symbol} ({current_idx}/{total_tasks}) [{s_str} -> {e_str}]"
                     sync_tracker.update_progress(table_id, current=current_idx, total=total_tasks, current_symbol=symbol, message=msg_text)
-                    logger.info(f"[PROGRESS] {table_id} | {current_idx}/{total_tasks} | {symbol}")
+                    logger.info(f"[PROGRESS] {table_id} | {current_idx}/{total_tasks} | {symbol} | [{s_str} -> {e_str}]")
                     
                     try:
                         # Step 1: Provider 采集标准化数据
@@ -133,7 +144,7 @@ class SyncManager:
                         sync_tracker.finish_task(table_id, success=False, message=f"抓取 {symbol} 失败: {e}", error_msg=str(e))
                         raise e
                 
-                # Step 2: 批次内存聚合与多路下沉
+                # Step 2: 批次内存聚合与多路分片暂存下沉 (写入独立分片，消除 OOM 与写放大)
                 if batch_dfs:
                     big_df = pl.concat(batch_dfs)
                     
@@ -141,23 +152,31 @@ class SyncManager:
                     category = provider.get_table_category(table_id)
                     sort_keys = provider.get_sort_keys(table_id)
                     
-                    sync_tracker.update_progress(table_id, current=current_idx, total=total_tasks, current_symbol=symbol, message=f"正在落盘 {len(batch_dfs)} 个代码数据至 {formats}...")
+                    sync_tracker.update_progress(table_id, current=current_idx, total=total_tasks, current_symbol=symbol, message=f"正在暂存 {len(batch_dfs)} 个代码数据至 {formats}...")
 
                     for fmt, storage in storages.items():
-                        logger.debug(f"[BATCH] Writing to storage: {fmt} (category={category})")
-                        # 根据类别调用不同的写入方法
+                        logger.debug(f"[BATCH] Writing partition batch to storage: {fmt} (category={category})")
+                        # 批处理循环中：直接写入分片，避免中间过程重复大文件合并与 OOM
                         if category == "event":
-                            storage.write_event(table_id, big_df, mode="append", sort_keys=sort_keys)
+                            storage.write_event(table_id, big_df, sort_keys=sort_keys)
                         else:
                             # 默认为 TS
-                            storage.write_series(table_id, big_df, mode="append")
+                            storage.write_series(table_id, big_df)
                     
                     data_written = True
                     logger.info(f"[BATCH] Aggregated {len(batch_dfs)} symbols, total {len(big_df)} rows written to {formats}.")
                     batch_dfs.clear()
                     del big_df
 
-            # 全表所有批次成功下沉落盘后，统一更新元数据水位线，防止中途中断导致水位线虚高
+            # 全表所有批次成功采集并暂存后，统一触发流式合并与排序刷盘 (Finalize)
+            if data_written:
+                mode_to_use = "overwrite" if force_refresh else "append"
+                sort_keys = provider.get_sort_keys(table_id) if category == "event" else None
+                for fmt, storage in storages.items():
+                    logger.info(f"[*] Finalizing staged partitions for {table_id} ({fmt}, mode={mode_to_use})...")
+                    storage.finalize(table_id, mode=mode_to_use, sort_keys=sort_keys)
+
+            # 统一更新元数据水位线，防止中途中断导致水位线虚高
             for fmt, storage in storages.items():
                 self._update_metadata(table_id, fmt, storage, last_success_df, data_written, force_refresh)
             
@@ -169,6 +188,12 @@ class SyncManager:
             sync_tracker.finish_task(table_id, success=True, message=finish_msg)
             logger.info(f"[+] Sync finished for {table_id}. {finish_msg}")
         except Exception as err:
+            # 发生异常时，清理各存储引擎未提交的暂存分片，杜绝脏文件残留
+            for fmt, storage in storages.items():
+                try:
+                    storage.cleanup(table_id)
+                except Exception:
+                    pass
             sync_tracker.finish_task(table_id, success=False, message=f"同步中断: {err}", error_msg=str(err))
             raise err
 

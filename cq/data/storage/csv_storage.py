@@ -149,7 +149,7 @@ class CSVStorage(StorageManager):
                 final_df.write_csv(tmp_path)
                 os.replace(tmp_path, path)
 
-    def write_event(self, table_id: str, df: pl.DataFrame, mode: str, sort_keys: list[str]):
+    def write_event(self, table_id: str, df: pl.DataFrame, mode: str = "append", sort_keys: list[str] = None):
         """
         写入事件数据 (EV)。
         - 有 timestamp 列: 按 year Hive 分区布局 + 全行去重

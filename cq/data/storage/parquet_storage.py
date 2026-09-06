@@ -1,10 +1,10 @@
+import os
+import shutil
 import threading
 import uuid
 from pathlib import Path
-import os
 import polars as pl
 from .base import StorageManager
-from .data_merger import DataMerger
 from ..service.metadata_manager import MetadataManager
 
 class ParquetStorage(StorageManager):
@@ -126,96 +126,153 @@ class ParquetStorage(StorageManager):
             return pl.DataFrame()
         return self._read_with_schema(table_id, path)
 
+    def _get_staging_dir(self, table_id: str, year: int = None) -> Path:
+        """获取分片暂存目录 (.staging)"""
+        if year is not None:
+            return self.data_dir / table_id / f"year={year}" / ".staging"
+        return self.data_dir / table_id / ".staging"
+
     def write_series(self, table_id: str, df: pl.DataFrame, mode: str = "append"):
         """
-        写入时间序列数据 (TS)。按年分区落盘。
+        写入时间序列 (TS) 数据分片至 .staging 暂存目录。
+        按年切分毫秒级写入独立的轻量分片，0 读盘开销，0 内存膨胀。
+        后续需调用 finalize 统一流式收敛落盘。
         """
         if df.is_empty():
             return
 
         with self._lock:
-            # 提取年份用于分区
             df = df.with_columns(
                 pl.from_epoch(pl.col("timestamp"), time_unit="ms").dt.year().alias("_year")
             )
-
-            # 按 _year 分组处理
             for (year,), group_df in df.partition_by(["_year"], as_dict=True).items():
-                path = self._get_series_path(table_id, year)
                 patch_df = group_df.drop("_year")
-
-                if mode == "append" and path.exists():
-                    # 读取并合并（使用强锁对齐 patch_df 的类型）
-                    old_df = self._read_with_schema(table_id, path, schema_override=patch_df.schema)
-                    # TS 模式：基于 [symbol, timestamp] 去重
-                    merged_df = DataMerger.merge(old_df, patch_df, subset=["symbol", "timestamp"])
-                else:
-                    # 首次写入或 Overwrite
-                    merged_df = patch_df
-                
-                # 显式使用 Symbol-First 排序，支持 MMF 索引
-                final_df = DataMerger.sort(merged_df, keys=["symbol", "timestamp"])
-
-                # 原子写入
-                path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = path.with_name(f".tmp_{path.stem}_{uuid.uuid4().hex[:8]}.tmp")
-                final_df.write_parquet(tmp_path, compression="zstd")
-                os.replace(tmp_path, path)
+                stage_dir = self._get_staging_dir(table_id, year)
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                part_path = stage_dir / f"part_{uuid.uuid4().hex}.parquet"
+                patch_df.write_parquet(part_path, compression="zstd")
 
     def write_event(self, table_id: str, df: pl.DataFrame, mode: str = "append", sort_keys: list[str] = None):
         """
-        写入事件数据 (EV)。
-        - 有 timestamp 列: 按 year Hive 分区布局 + 全行去重
-        - 无 timestamp 列: 平铺布局 + 全行去重 (板块成分股等静态列表)
+        写入事件数据 (EV) 分片至 .staging 暂存目录。
+        支持平铺模式与 Hive 分区模式独立分片写入。
+        后续需调用 finalize 统一流式收敛落盘。
         """
         if df.is_empty():
             return
 
         with self._lock:
             if "timestamp" not in df.columns:
-                # 平铺模式：无 Hive 分区，文件路径为 {root}/{table_id}/data.parquet
-                path = self._get_flat_event_path(table_id)
-                
-                if mode == "append" and path.exists():
-                    old_df = self._read_with_schema(table_id, path, schema_override=df.schema)
-                    merged_df = DataMerger.merge(old_df, df, subset=None)
-                else:
-                    merged_df = df
-                
-                final_df = DataMerger.sort(merged_df, keys=sort_keys)
-                
-                path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = path.with_name(f".tmp_{path.stem}_{uuid.uuid4().hex[:8]}.tmp")
-                final_df.write_parquet(tmp_path, compression="zstd")
-                os.replace(tmp_path, path)
+                # 平铺模式
+                stage_dir = self._get_staging_dir(table_id)
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                part_path = stage_dir / f"part_{uuid.uuid4().hex}.parquet"
+                df.write_parquet(part_path, compression="zstd")
                 return
 
-            # Hive 分区模式：提取年份用于分区
+            # Hive 分区模式
             df = df.with_columns(
                 pl.from_epoch(pl.col("timestamp"), time_unit="ms").dt.year().alias("_year")
             )
-
-            # 按 _year 分组处理
             for (year,), group_df in df.partition_by(["_year"], as_dict=True).items():
-                path = self._get_event_path(table_id, year)
                 patch_df = group_df.drop("_year")
+                stage_dir = self._get_staging_dir(table_id, year)
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                part_path = stage_dir / f"part_{uuid.uuid4().hex}.parquet"
+                patch_df.write_parquet(part_path, compression="zstd")
 
-                if mode == "append" and path.exists():
-                    # 读取并合并（使用强锁对齐 patch_df 的类型）
-                    old_df = self._read_with_schema(table_id, path, schema_override=patch_df.schema)
-                    # EV 模式：全行去重
-                    merged_df = DataMerger.merge(old_df, patch_df, subset=None)
-                else:
-                    # 首次写入或 Overwrite
-                    merged_df = patch_df
-                
-                final_df = DataMerger.sort(merged_df, keys=sort_keys)
+    def finalize(self, table_id: str, mode: str = "append", sort_keys: list[str] = None):
+        """
+        收敛所有暂存分片 (.staging) 并基于流式管道 (sink_parquet) 执行一次性落盘。
+        彻底消除批处理中每批重复重写大文件的 O(N^2) 写放大与全内存 OOM 隐患。
+        """
+        with self._lock:
+            # 1. 检查平铺模式的暂存目录
+            flat_staging = self._get_staging_dir(table_id)
+            if flat_staging.exists():
+                staging_files = sorted(list(flat_staging.glob("*.parquet")))
+                if staging_files:
+                    lazy_stages = [pl.scan_parquet(f) for f in staging_files]
+                    target_path = self._get_flat_event_path(table_id)
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
 
-                # 原子写入
-                path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = path.with_name(f".tmp_{path.stem}_{uuid.uuid4().hex[:8]}.tmp")
-                final_df.write_parquet(tmp_path, compression="zstd")
-                os.replace(tmp_path, path)
+                    base_schema = lazy_stages[0].collect_schema()
+                    if mode == "append" and target_path.exists():
+                        lazy_old = pl.scan_parquet(target_path)
+                        valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
+                        lazy_old = lazy_old.cast(valid_schema)
+                        all_lazy = [lazy_old] + [ls.cast(valid_schema) for ls in lazy_stages]
+                    else:
+                        all_lazy = [ls.cast(base_schema) for ls in lazy_stages]
+
+                    q = pl.concat(all_lazy).unique(subset=None, keep="last")
+                    if sort_keys:
+                        q = q.sort(sort_keys)
+                    q.sink_parquet(tmp_path)
+                    os.replace(tmp_path, target_path)
+                shutil.rmtree(flat_staging, ignore_errors=True)
+
+            # 2. 检查各 Hive 分区目录下的暂存目录
+            table_dir = self.data_dir / table_id
+            if not table_dir.exists():
+                return
+
+            for year_dir in sorted(table_dir.glob("year=*")):
+                if not year_dir.is_dir():
+                    continue
+                stage_dir = year_dir / ".staging"
+                if not stage_dir.exists():
+                    continue
+
+                staging_files = sorted(list(stage_dir.glob("*.parquet")))
+                if staging_files:
+                    lazy_stages = [pl.scan_parquet(f) for f in staging_files]
+                    target_path = year_dir / "data.parquet"
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
+
+                    base_schema = lazy_stages[0].collect_schema()
+                    if mode == "append" and target_path.exists():
+                        lazy_old = pl.scan_parquet(target_path)
+                        valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
+                        lazy_old = lazy_old.cast(valid_schema)
+                        all_lazy = [lazy_old] + [ls.cast(valid_schema) for ls in lazy_stages]
+                    else:
+                        all_lazy = [ls.cast(base_schema) for ls in lazy_stages]
+
+                    is_ts = self.category == "timeseries"
+                    subset = ["symbol", "timestamp"] if is_ts else None
+                    q = pl.concat(all_lazy).unique(subset=subset, keep="last")
+
+                    if is_ts:
+                        q = q.sort(["symbol", "timestamp"])
+                    else:
+                        if sort_keys:
+                            q = q.sort(sort_keys)
+                        elif "timestamp" in q.collect_schema().names():
+                            q = q.sort(["timestamp"])
+
+                    q.sink_parquet(tmp_path)
+                    os.replace(tmp_path, target_path)
+
+                shutil.rmtree(stage_dir, ignore_errors=True)
+
+    def cleanup(self, table_id: str):
+        """
+        清理该表下所有未提交的临时分片目录，实现任务异常中断时的无损自愈。
+        """
+        with self._lock:
+            flat_staging = self._get_staging_dir(table_id)
+            if flat_staging.exists():
+                shutil.rmtree(flat_staging, ignore_errors=True)
+
+            table_dir = self.data_dir / table_id
+            if table_dir.exists():
+                for year_dir in table_dir.glob("year=*"):
+                    stage_dir = year_dir / ".staging"
+                    if stage_dir.exists():
+                        shutil.rmtree(stage_dir, ignore_errors=True)
 
     def get_all_symbols(self, table_id: str) -> list[str]:
         """扫描所有 parquet 文件，提取唯一证券代码"""

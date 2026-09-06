@@ -40,6 +40,7 @@ def mock_storage_env(temp_data_dir):
     
     pq_ts = StorageFactory.get_storage("parquet", str(temp_data_dir), "timeseries")
     pq_ts.write_series(ts_table, df_ts)
+    pq_ts.finalize(ts_table)
 
     meta_mgr = MetadataManager(str(temp_data_dir))
     meta_mgr.save(ts_table, "parquet", {
@@ -67,6 +68,7 @@ def mock_storage_env(temp_data_dir):
     })
     pq_ev = StorageFactory.get_storage("parquet", str(temp_data_dir), "event")
     pq_ev.write_event(ev_table, df_ev, mode="overwrite", sort_keys=["symbol"])
+    pq_ev.finalize(ev_table, mode="overwrite", sort_keys=["symbol"])
 
     meta_mgr.save(ev_table, "parquet", {
         "category": "event",

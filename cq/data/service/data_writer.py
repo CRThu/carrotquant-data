@@ -175,6 +175,9 @@ class DataWriter:
             else:
                 storage.write_series(table_id, normalized_df, mode=mode)
 
+            # 单次写入后立即流式收敛落盘，保障外部 SDK/CLI 用户即写即读
+            storage.finalize(table_id, mode=mode, sort_keys=sort_keys if resolved_category == "event" else None)
+
             # 更新 metadata.json
             self._update_metadata(table_id, fmt, storage, normalized_df, resolved_category)
 

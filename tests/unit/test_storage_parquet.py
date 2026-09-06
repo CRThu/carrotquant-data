@@ -5,8 +5,9 @@ from cq.data.storage.parquet_storage import ParquetStorage
 from cq.data.service.metadata_manager import MetadataManager
 
 
-def _stamp_metadata(storage, table_id, df, category="timeseries"):
-    """辅助函数：为测试生成元数据，绕过物理巡检"""
+def _stamp_metadata(storage, table_id, df, category="timeseries", mode="append", sort_keys=None):
+    """辅助函数：为测试收敛分片并生成元数据，完成任务生命周期闭环"""
+    storage.finalize(table_id, mode=mode, sort_keys=sort_keys)
     meta_mgr = MetadataManager(storage.data_dir.parent)
     meta_mgr.save(table_id, "parquet", {
         "table_id": table_id, 
@@ -84,6 +85,7 @@ def test_parquet_storage_deduplication(temp_data_dir):
         "close": [99.9, 11.0]  # 01-02 的值被修改
     })
     storage.write_series(table_id, df2)
+    storage.finalize(table_id, mode="append")
     
     # 读取数据
     read_df = storage.read_series(table_id, "sh.600000", 2023)
@@ -264,7 +266,7 @@ def test_parquet_storage_ev_no_symbol(temp_data_dir):
     
     # 写入数据
     storage.write_event(table_id, df, mode="overwrite", sort_keys=["timestamp"])
-    _stamp_metadata(storage, table_id, df, category="event")
+    _stamp_metadata(storage, table_id, df, category="event", mode="overwrite", sort_keys=["timestamp"])
     
     # 验证文件创建
     table_dir = temp_data_dir / "parquet" / table_id
@@ -292,6 +294,7 @@ def test_parquet_storage_ev_no_symbol(temp_data_dir):
     })
     
     storage.write_event(table_id, df_new, mode="append", sort_keys=["timestamp"])
+    storage.finalize(table_id, mode="append", sort_keys=["timestamp"])
     
     # 重新读取验证
     read_df_final = storage.read_event(table_id, 2024)
@@ -381,3 +384,264 @@ def test_parquet_write_series_with_schema_cast(temp_data_dir):
     assert read_df["low"].dtype == pl.Float64
     assert read_df["close"].dtype == pl.Float64
     assert read_df["symbol"].dtype == pl.String
+
+
+# ---------------------------------------------------------------------------
+# 批处理分片暂存 (Staging) 与流式合并 (Finalize / Cleanup) 机制测试
+# ---------------------------------------------------------------------------
+
+def test_parquet_write_series_staging_and_finalize(tmp_path: Path):
+    """验证 TS 模式下的分片写入与最终收敛合并 (Finalize)"""
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.raw.mock"
+
+    # Batch 1: symbol 000001
+    df1 = pl.DataFrame({
+        "symbol": ["000001", "000001"],
+        "timestamp": [1735689600000, 1735689660000],  # 2025-01-01
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:01:00+08:00"],
+        "close": [10.0, 10.5],
+    })
+
+    # Batch 2: symbol 000002
+    df2 = pl.DataFrame({
+        "symbol": ["000002", "000002"],
+        "timestamp": [1735689600000, 1735689660000],  # 2025-01-01
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:01:00+08:00"],
+        "close": [20.0, 20.5],
+    })
+
+    # 写入两个批次的分片
+    storage.write_series(table_id, df1)
+    storage.write_series(table_id, df2)
+
+    stage_dir = tmp_path / table_id / "year=2025" / ".staging"
+    final_file = tmp_path / table_id / "year=2025" / "data.parquet"
+
+    # 验证此时分片在 .staging 中，final 尚未落盘
+    assert stage_dir.exists()
+    staging_parts = list(stage_dir.glob("*.parquet"))
+    assert len(staging_parts) == 2
+    assert not final_file.exists()
+
+    # 执行收敛合并
+    storage.finalize(table_id, mode="append")
+
+    # 验证收敛后 .staging 已清除，final_file 生成且数据完整
+    assert not stage_dir.exists()
+    assert final_file.exists()
+
+    res = pl.read_parquet(final_file)
+    assert len(res) == 4
+    assert res["symbol"].to_list() == ["000001", "000001", "000002", "000002"]
+
+
+def test_parquet_staging_append_override(tmp_path: Path):
+    """验证 finalize(mode='append') 时对同一 [symbol, timestamp] 的新数据覆盖更新"""
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.raw.mock"
+
+    # 初始历史数据写入并 finalize 提交
+    old_df = pl.DataFrame({
+        "symbol": ["000001", "000002"],
+        "timestamp": [1735689600000, 1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:00:00+08:00"],
+        "close": [10.0, 20.0],
+    })
+    storage.write_series(table_id, old_df)
+    storage.finalize(table_id, mode="overwrite")
+
+    # 增量批次写入分片 (更新 000001，新增 000003)
+    patch_df = pl.DataFrame({
+        "symbol": ["000001", "000003"],
+        "timestamp": [1735689600000, 1735689660000],
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:01:00+08:00"],
+        "close": [15.5, 30.0],  # 000001 更新为 15.5
+    })
+    storage.write_series(table_id, patch_df)
+
+    # 执行 finalize
+    storage.finalize(table_id, mode="append")
+
+    final_file = tmp_path / table_id / "year=2025" / "data.parquet"
+    res = pl.read_parquet(final_file)
+    assert len(res) == 3
+
+    # 验证 000001 价格被更新为 15.5
+    row_000001 = res.filter(pl.col("symbol") == "000001")
+    assert row_000001["close"][0] == 15.5
+
+
+def test_parquet_staging_overwrite(tmp_path: Path):
+    """验证 finalize(mode='overwrite') 时丢弃旧数据，仅保留新暂存数据"""
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.raw.mock"
+
+    old_df = pl.DataFrame({
+        "symbol": ["OLD_SYM"],
+        "timestamp": [1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00"],
+        "close": [99.9],
+    })
+    storage.write_series(table_id, old_df)
+    storage.finalize(table_id, mode="overwrite")
+
+    new_df = pl.DataFrame({
+        "symbol": ["NEW_SYM"],
+        "timestamp": [1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00"],
+        "close": [1.1],
+    })
+    storage.write_series(table_id, new_df)
+
+    # 强制覆盖收敛
+    storage.finalize(table_id, mode="overwrite")
+
+    final_file = tmp_path / table_id / "year=2025" / "data.parquet"
+    res = pl.read_parquet(final_file)
+    assert len(res) == 1
+    assert res["symbol"][0] == "NEW_SYM"
+
+
+def test_parquet_cleanup(tmp_path: Path):
+    """验证异常时 cleanup 清理全部临时分片"""
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.raw.mock"
+
+    df = pl.DataFrame({
+        "symbol": ["000001"],
+        "timestamp": [1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00"],
+        "close": [10.0],
+    })
+    storage.write_series(table_id, df)
+
+    stage_dir = tmp_path / table_id / "year=2025" / ".staging"
+    assert stage_dir.exists()
+
+    storage.cleanup(table_id)
+    assert not stage_dir.exists()
+
+
+def test_parquet_write_event_staging_flat_and_partitioned(tmp_path: Path):
+    """验证 EV 模式下平铺与 Hive 分区的暂存合并"""
+    # 1. 平铺 EV (无 timestamp)
+    storage_flat = ParquetStorage(data_dir=str(tmp_path), category="event")
+    flat_table = "test.concept.mock"
+    df_flat1 = pl.DataFrame({"board_code": ["BK001"], "symbol": ["000001"]})
+    df_flat2 = pl.DataFrame({"board_code": ["BK001"], "symbol": ["000002"]})
+
+    storage_flat.write_event(flat_table, df_flat1, sort_keys=["board_code", "symbol"])
+    storage_flat.write_event(flat_table, df_flat2, sort_keys=["board_code", "symbol"])
+
+    storage_flat.finalize(flat_table, mode="append", sort_keys=["board_code", "symbol"])
+    flat_res = pl.read_parquet(tmp_path / flat_table / "data.parquet")
+    assert len(flat_res) == 2
+    assert flat_res["symbol"].to_list() == ["000001", "000002"]
+
+    # 2. Hive 分区 EV (有 timestamp)
+    storage_part = ParquetStorage(data_dir=str(tmp_path), category="event")
+    part_table = "test.adj_factor.mock"
+    df_part1 = pl.DataFrame({
+        "symbol": ["000001"],
+        "timestamp": [1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00"],
+        "back_adj_factor": [1.0],
+    })
+    df_part2 = pl.DataFrame({
+        "symbol": ["000002"],
+        "timestamp": [1735689600000],
+        "datetime": ["2025-01-01T08:00:00+08:00"],
+        "back_adj_factor": [1.5],
+    })
+    storage_part.write_event(part_table, df_part1, sort_keys=["timestamp", "symbol"])
+    storage_part.write_event(part_table, df_part2, sort_keys=["timestamp", "symbol"])
+
+    storage_part.finalize(part_table, mode="append", sort_keys=["timestamp", "symbol"])
+    part_res = pl.read_parquet(tmp_path / part_table / "year=2025" / "data.parquet")
+    assert len(part_res) == 2
+    assert sorted(part_res["symbol"].to_list()) == ["000001", "000002"]
+
+
+def test_parquet_large_batch_streaming_simulation(tmp_path: Path):
+    """
+    模拟高频分钟线多批次落盘场景：
+    连续 5 个批次，每批 20,000 行（累计 10 万行），验证分片暂存与最终流式合并零内存故障。
+    """
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.large_simulation"
+
+    total_rows = 0
+    base_ts = 1735689600000  # 2025-01-01 08:00:00
+
+    # 模拟 5 个批次分片写入
+    for batch_i in range(5):
+        n_rows = 20000
+        sym = f"sh.60000{batch_i}"
+        df_batch = pl.DataFrame({
+            "symbol": [sym] * n_rows,
+            "timestamp": [base_ts + i * 60000 for i in range(n_rows)],
+            "datetime": ["2025-01-01T08:00:00+08:00"] * n_rows,
+            "open": [10.0] * n_rows,
+            "high": [11.0] * n_rows,
+            "low": [9.0] * n_rows,
+            "close": [10.5] * n_rows,
+            "volume": [1000.0] * n_rows,
+        })
+        storage.write_series(table_id, df_batch)
+        total_rows += n_rows
+
+    stage_dir = tmp_path / table_id / "year=2025" / ".staging"
+    assert stage_dir.exists()
+    assert len(list(stage_dir.glob("*.parquet"))) == 5
+
+    # 最终统一收敛
+    storage.finalize(table_id, mode="append")
+
+    assert not stage_dir.exists()
+    final_file = tmp_path / table_id / "year=2025" / "data.parquet"
+    assert final_file.exists()
+
+    # 验证行数与标的数
+    scan_df = pl.scan_parquet(final_file)
+    assert scan_df.select(pl.len()).collect().item() == total_rows
+    unique_syms = scan_df.select("symbol").unique().collect()["symbol"].to_list()
+    assert len(unique_syms) == 5
+
+
+def test_parquet_storage_edge_cases_and_defense(tmp_path: Path):
+    """
+    边界与防御路径测试：
+    1. write_event 空 DataFrame 拦截
+    2. 平铺模式分片暂存后调用 cleanup 彻底清理
+    3. read_series / read_event 未传 year 参数的参数校验拦截
+    4. 不存在的 table_id 调用 finalize 和 cleanup 保证安全幂等不报错
+    """
+    storage_ts = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    storage_ev = ParquetStorage(data_dir=str(tmp_path), category="event")
+    table_id = "test.parquet.defense"
+
+    # 1. 空 DataFrame 写入防呆
+    storage_ev.write_event(table_id, pl.DataFrame())
+    assert not (tmp_path / table_id).exists()
+
+    # 2. 平铺模式下的分片暂存与 cleanup
+    flat_table = "test.concept.flat_cleanup"
+    flat_df = pl.DataFrame({"board_code": ["BK001"], "symbol": ["000001"]})
+    storage_ev.write_event(flat_table, flat_df, sort_keys=["board_code", "symbol"])
+    flat_staging = tmp_path / flat_table / ".staging"
+    assert flat_staging.exists()
+    storage_ev.cleanup(flat_table)
+    assert not flat_staging.exists()
+
+    # 3. read 未指定 year 异常抛出
+    with pytest.raises(ValueError, match="Year must be specified for reading series data"):
+        storage_ts.read_series(table_id, "000001", year=None)
+
+    with pytest.raises(ValueError, match="Year must be specified for partitioned event data"):
+        storage_ev.read_event(table_id, year=None)
+
+    # 4. 幂等安全性：对不存在的 table 执行 finalize / cleanup
+    non_existent_table = "test.parquet.non_existent"
+    storage_ts.finalize(non_existent_table)
+    storage_ts.cleanup(non_existent_table)

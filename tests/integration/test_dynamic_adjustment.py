@@ -52,6 +52,7 @@ def populated_kline_and_factor_storage(temp_data_dir):
     storage_pq_ev = StorageFactory.get_storage("parquet", data_dir=data_dir, category="event")
     storage_pq_ev.write_event("ashare.adj_factor.baostock", factor_df_2023)
     storage_pq_ev.write_event("ashare.adj_factor.baostock", factor_df_2024)
+    storage_pq_ev.finalize("ashare.adj_factor.baostock")
 
     meta_mgr.save("ashare.adj_factor.baostock", "parquet", {
         "version": 1,
@@ -94,6 +95,7 @@ def populated_kline_and_factor_storage(temp_data_dir):
 
     storage_pq_ts = StorageFactory.get_storage("parquet", data_dir=data_dir, category="timeseries")
     storage_pq_ts.write_series("ashare.kline.1d.raw.baostock", kline_df_2024)
+    storage_pq_ts.finalize("ashare.kline.1d.raw.baostock")
 
     meta_mgr.save("ashare.kline.1d.raw.baostock", "parquet", {
         "version": 1,
@@ -140,6 +142,7 @@ def populated_kline_and_factor_storage(temp_data_dir):
     })
 
     storage_pq_ts.write_series("ashare.kline.1m.raw.tdx", tdx_min_df_2024)
+    storage_pq_ts.finalize("ashare.kline.1m.raw.tdx")
 
     meta_mgr.save("ashare.kline.1m.raw.tdx", "parquet", {
         "version": 1,
@@ -254,6 +257,7 @@ def test_end_to_end_static_adj_precedence(populated_kline_and_factor_storage, te
     })
 
     storage_pq_ts.write_series("ashare.kline.1d.adj.baostock", static_adj_df)
+    storage_pq_ts.finalize("ashare.kline.1d.adj.baostock")
     meta_mgr.save("ashare.kline.1d.adj.baostock", "parquet", {
         "version": 1,
         "table_id": "ashare.kline.1d.adj.baostock",

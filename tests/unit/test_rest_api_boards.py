@@ -25,6 +25,7 @@ def test_list_boards_and_api_endpoint(tmp_path, monkeypatch):
     })
     
     storage.write_event(table_id, df, mode="overwrite")
+    storage.finalize(table_id, mode="overwrite")
     
     meta_mgr = MetadataManager(str(tmp_path))
     dummy_meta = {
@@ -84,6 +85,7 @@ def test_list_boards_industry(tmp_path, monkeypatch):
     })
     
     storage.write_event(table_id, df, mode="overwrite")
+    storage.finalize(table_id, mode="overwrite")
     
     meta_mgr = MetadataManager(str(tmp_path))
     dummy_meta = {

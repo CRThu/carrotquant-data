@@ -65,6 +65,8 @@ def test_parquet_storage_multithreaded_concurrency(tmp_path):
         for f in concurrent.futures.as_completed(futures):
             f.result()
 
+    storage.finalize(table_id)
+
     meta_mgr = MetadataManager(str(tmp_path))
     meta_mgr.save(table_id, "parquet", {
         "table_id": table_id,

@@ -53,7 +53,8 @@ class StorageManager(abc.ABC):
     @abc.abstractmethod
     def write_series(self, table_id: str, df: pl.DataFrame, mode: str = "append"):
         """
-        写入时间序列数据 (TS)。按 symbol 和 year 分区存储。
+        写入时间序列数据 (TS) 分片。按 symbol 和 year 分区快速写入，
+        所有批次写入完毕后，需调用 finalize 统一执行流式去重与排序落盘。
         
         Args:
             table_id: 表 ID
@@ -63,15 +64,31 @@ class StorageManager(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def write_event(self, table_id: str, df: pl.DataFrame, mode: str, sort_keys: list[str]):
+    def write_event(self, table_id: str, df: pl.DataFrame, mode: str = "append", sort_keys: list[str] = None):
         """
-        写入事件数据 (EV)。按 year 单文件布局存储，执行全行去重。
+        写入事件数据 (EV) 分片。按 year 分区或平铺结构快速写入，
+        所有批次写入完毕后，需调用 finalize 统一执行流式去重与排序落盘。
         
         Args:
             table_id: 表 ID
             df: 包含 timestamp 等字段的 DataFrame
             mode: 写入模式，支持 "overwrite" (覆盖) 或 "append" (增量)
             sort_keys: 排序列列表，由 Provider 显式指定
+        """
+        pass
+
+
+    def finalize(self, table_id: str, mode: str = "append", sort_keys: list[str] = None):
+        """
+        收敛暂存批次并执行流式去重与排序落盘。
+        默认空操作，供需要分片合并的引擎 (如 ParquetStorage) 重写。
+        """
+        pass
+
+    def cleanup(self, table_id: str):
+        """
+        清理该表的未提交临时分片文件，避免异常退出残留脏文件。
+        默认空操作，供支持分片暂存的引擎重写。
         """
         pass
 

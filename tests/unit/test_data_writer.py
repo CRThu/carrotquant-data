@@ -193,3 +193,38 @@ def test_writer_alias_normalization_and_metadata_inheritance(tmp_path):
     assert res_app["category"] == "timeseries"
     assert res_app["rows_written"] == 1
 
+
+def test_writer_validation_and_defense_paths(tmp_path):
+    """测试 DataWriter 入参防御校验与 ticker/time 别名转换"""
+    writer = DataWriter(data_dir=tmp_path)
+
+    # 1. table_id 为空
+    with pytest.raises(ValueError, match="table_id must be a non-empty string"):
+        writer.write("", pl.DataFrame({"symbol": ["000001"], "timestamp": [1000]}))
+
+    # 2. 不支持的 format
+    with pytest.raises(ValueError, match="Unsupported format"):
+        writer.write("test.table", pl.DataFrame({"symbol": ["000001"], "timestamp": [1000]}), formats="json")
+
+    # 3. 不支持的 mode
+    with pytest.raises(ValueError, match="Invalid mode"):
+        writer.write("test.table", pl.DataFrame({"symbol": ["000001"], "timestamp": [1000]}), mode="upsert")
+
+    # 4. 时序表缺少时间列
+    with pytest.raises(ValueError, match="TimeSeries table requires a time column"):
+        writer.write("test.table", pl.DataFrame({"symbol": ["000001"], "val": [10]}), category="timeseries")
+
+    # 5. ticker 别名与 time 别名转换
+    df_ticker = pl.DataFrame({
+        "ticker": ["000001"],
+        "time": ["2024-01-01 15:00:00"],
+        "val": [100.0]
+    })
+    res = writer.write("test.ticker_alias", df_ticker)
+    assert res["rows_written"] == 1
+    reader = DataReader(data_dir=tmp_path)
+    df_read = reader.read_series("test.ticker_alias")
+    assert "symbol" in df_read.columns
+    assert "timestamp" in df_read.columns
+    assert df_read["symbol"][0] == "000001"
+

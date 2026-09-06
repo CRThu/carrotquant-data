@@ -14,8 +14,9 @@ from cq.data.storage.parquet_storage import ParquetStorage
 from cq.data.service.metadata_manager import MetadataManager
 
 
-def _stamp_metadata(storage, table_id, df, fmt="csv", category="event"):
-    """辅助函数：为测试生成元数据"""
+def _stamp_metadata(storage, table_id, df, fmt="csv", category="event", mode="append", sort_keys=None):
+    """辅助函数：为测试收敛分片并生成元数据"""
+    storage.finalize(table_id, mode=mode, sort_keys=sort_keys)
     meta_mgr = MetadataManager(storage.data_dir.parent)
     meta_mgr.save(table_id, fmt, {
         "table_id": table_id, "category": category, "format": fmt,
@@ -199,6 +200,7 @@ class TestParquetFlat:
             "stock_name": ["股票A", "股票B", "股票A"],
         })
         storage.write_event(table_id, df, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
+        storage.finalize(table_id, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
         
         flat_path = temp_data_dir / "parquet" / table_id / "data.parquet"
         assert flat_path.exists(), "应创建平铺文件 data.parquet"
@@ -218,7 +220,7 @@ class TestParquetFlat:
             "stock_name": ["股票A", "股票B"],
         })
         storage.write_event(table_id, df, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
-        _stamp_metadata(storage, table_id, df, fmt="parquet")
+        _stamp_metadata(storage, table_id, df, fmt="parquet", mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
         
         read_df = storage.read_event(table_id)
         assert len(read_df) == 2
@@ -236,7 +238,7 @@ class TestParquetFlat:
             "stock_name": ["股票A", "股票B", "股票A"],
         })
         storage.write_event(table_id, df1, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
-        _stamp_metadata(storage, table_id, df1, fmt="parquet")
+        _stamp_metadata(storage, table_id, df1, fmt="parquet", mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
         
         df2 = pl.DataFrame({
             "board_code": ["BK0001", "BK0001", "BK0003"],
@@ -245,6 +247,7 @@ class TestParquetFlat:
             "stock_name": ["股票A", "股票B", "股票C"],
         })
         storage.write_event(table_id, df2, mode="append", sort_keys=["board_code", "board_name", "symbol"])
+        storage.finalize(table_id, mode="append", sort_keys=["board_code", "board_name", "symbol"])
         
         read_df = storage.read_event(table_id)
         assert len(read_df) == 4, f"期望 4 行，实际 {len(read_df)}"
@@ -261,6 +264,7 @@ class TestParquetFlat:
             "stock_name": ["股票A", "股票B", "股票A"],
         })
         storage.write_event(table_id, df, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
+        storage.finalize(table_id, mode="overwrite", sort_keys=["board_code", "board_name", "symbol"])
         
         assert storage.get_total_bars(table_id) == 3
 

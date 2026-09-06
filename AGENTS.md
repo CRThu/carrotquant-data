@@ -109,9 +109,10 @@ graph TB
     SM -->|"① get_provider()"| PM
     SM -->|"② plan()"| TP
     SM -->|"③ get_storage()"| SF
-    SM -->|"④ write_*()"| CSV
-    SM -->|"④ write_*()"| PQ
-    SM -->|"⑤ save()"| MM
+    SM -->|"④ write_*() [分片暂存]"| CSV
+    SM -->|"④ write_*() [分片暂存]"| PQ
+    SM -->|"⑤ finalize() [流式收敛落盘]"| PQ
+    SM -->|"⑥ save() [原子发布元数据]"| MM
 
     TP -->|"load()"| MM
     PM --> BP & EP & TP_DRV & SP_DRV
@@ -122,13 +123,13 @@ graph TB
     BP & EP & TP_DRV & SP_DRV --> DC
 
     SF --> CSV & PQ
-    CSV & PQ --> DM
+    CSV --> DM
     CSV --> CSV_FILES
     PQ --> PQ_FILES
     MM --> META
 ```
 
-### 3.2 同步数据流
+### 3.2 同步数据流与四阶段生命周期
 
 ```
 用户请求 (CLI / Python SDK / API / Wizard)
@@ -139,9 +140,12 @@ SyncManager.sync()
     ├── 2. TaskPlanner.plan() -> 比较本地 metadata 水位线与目标时间，规划补充任务
     ├── 3. 批处理循环 (batch_size 切分 symbols):
     │      ├── Provider.fetch() -> 拉取原始数据 -> DataCleaner.standardize() 标准化
-    │      └── Batch pl.concat() -> 批量写入 CSVStorage / ParquetStorage
-    └── 4. 物理巡检与元数据更新:
-           Storage 检查物理状态 -> MetadataManager.save() 原子化更新 metadata.json
+    │      └── Batch pl.concat() -> storage.write_*() 极速写入分片暂存 (零读盘、零写放大)
+    ├── 4. 任务统一收敛落盘 (批处理全部完成后):
+    │      └── storage.finalize() -> Polars Lazy 流式管道多维去重、多列排序与原子替换
+    │          (若遇异常中断则触发 storage.cleanup() 快速回滚未提交分片)
+    └── 5. 物理巡检与元数据发布:
+           Storage 检查物理状态 -> MetadataManager.save() 原子化更新 metadata.json (数据正式对外可见)
 ```
 
 ---
@@ -177,10 +181,10 @@ SyncManager.sync()
 - **`ProviderManager`**: Provider 单例工厂，根据 `table_id` 末段标识路由驱动。
 
 ### 4.4 持久化存储层 (Storage)
-- **`StorageManager` (ABC)**: 存储抽象基类，统一 `read_series`, `read_event`, `write_series`, `write_event` 接口。
-- **`CSVStorage`**: TS 数据按 `[symbol, year]` 分片 CSV；EV 数据按 `[year]` 或平铺存储。
-- **`ParquetStorage`**: TS/EV 数据按 `[year]` 保存为 zstd 压缩 Parquet 大表或平铺大表。
-- **`DataMerger`**: 负责新旧 Polars DataFrame 的增量合并（`unique keep='last'`）与多维列排序。
+- **`StorageManager` (ABC)**: 存储抽象基类，统一规范 `read_series`, `read_event`, `write_series`, `write_event`, `finalize`, `cleanup` 接口契约，实现流式收敛与异常回滚能力。
+- **`ParquetStorage`**: 采用“分片暂存 + 统一流式收敛”架构。批次写入通过 `write_series` / `write_event` 直写 `.staging/` 独立分片（零读盘与零写放大）；所有批次完成后统一调度 `finalize()` 基于 Polars LazyFrame `sink_parquet` 流式管道执行多维去重、多列排序与原子替换落盘；发生异常通过 `cleanup()` 快速回滚未提交分片，彻底杜绝高频大数据下的内存溢出与写放大。
+- **`CSVStorage`**: TS 数据按 `[symbol, year]` 分片 CSV；EV 数据按 `[year]` 或平铺存储，基于 `DataMerger` 执行行级别增量合并与文件覆盖。
+- **`DataMerger`**: 负责 CSVStorage 新旧 Polars DataFrame 的增量合并（`unique keep='last'`）与多维列排序。
 
 ---
 
@@ -316,6 +320,7 @@ type_map = {
 5. **增量水位线**: 多格式同步时水位线取交集保守计算 (`start` 取 max, `end` 取 min)，保证各存储格式完整覆盖。
 6. **无损降级处理**: EV 数据在缺少 `symbol` 列时自动回退为仅按 `timestamp` 排序，严禁抛出 `ColumnNotFoundError`。
 7. **驱动层强类型构造规约**: 从原始数据构造 DataFrame 必须显式传入 `schema` 强类型字典（如 `pl.DataFrame(records, schema=raw_schema)`），严禁使用自动类型推断，防止因前缀连续 `None` 误判为 `Null` 导致后续数据追加溢出崩溃，并确保批处理批量聚合时 Schema 严格对齐。
+8. **四阶段生命周期与流式收敛保障**: 数据生命周期严格遵循：① 分片暂存落盘 (`write_*`) ➔ ② 全量统一收敛 (`finalize()`) ➔ ③ 原子发布元数据 (`metadata.json`) ➔ ④ 外部查询可见。在步骤 ② 和 ③ 完成前，元数据不推进，外部不可见；若中途异常中断，强制在终止异常区触发 `storage.cleanup()` 回滚清除未提交脏分片，确保物理状态守恒与退出零脏状态。
 
 ---
 
