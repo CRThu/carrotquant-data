@@ -99,7 +99,6 @@ class StockDBProvider(BaseProvider):
         query_func: Callable,
         *args,
         max_retries: int = 3,
-        retry_on_empty: bool = False,
         desc: str = "query",
         **kwargs,
     ) -> Any:
@@ -107,18 +106,12 @@ class StockDBProvider(BaseProvider):
         具备自动重试与防静默空包的底层通信调用包装器。
         
         - 对底层 TimeoutError / ConnectionError / socket.error 等所有异常进行指数退避自动重试（默认 3 次）；
-        - 重试耗尽后显式记录 Error 日志并抛出强类型异常，绝不静默吞错；
-        - 可选针对空结果进行二次确认（防止底层 LevelDB 游标偶发抖动）。
+        - 重试耗尽后显式记录 Error 日志并抛出强类型异常，绝不静默吞错。
         """
         last_exc = None
         for attempt in range(1, max_retries + 1):
             try:
-                res = query_func(*args, **kwargs)
-                # 若需要对空结果二次确认（防底层游标瞬态抖动）
-                if retry_on_empty and not res and attempt == 1:
-                    time.sleep(0.05)
-                    continue
-                return res
+                return query_func(*args, **kwargs)
             except Exception as e:
                 last_exc = e
                 if attempt == max_retries:
@@ -332,27 +325,43 @@ class StockDBProvider(BaseProvider):
         s_dt = datetime.strptime(start_date[:10], "%Y-%m-%d") if start_date else datetime(1970, 1, 1)
         e_dt = datetime.strptime(end_date[:10], "%Y-%m-%d") if end_date else datetime.now()
 
+        # 快速探针：探查底层真实最早记录，无数据时保持 month_ranges 为空直接由函数末端出口统一返回
+        earliest_item = self._safe_query(
+            self._rd.get_data,
+            raw_code,
+            limit=1,
+            frequency="1m",
+            fq=None,
+            desc=f"探测最早1m记录 [{symbol}]",
+        ) or []
+
         month_ranges = []
-        curr = datetime(s_dt.year, s_dt.month, 1)
-        while curr <= e_dt:
-            if curr.year == s_dt.year and curr.month == s_dt.month:
-                q_s = s_dt.strftime("%Y%m%d")
-            else:
-                q_s = curr.strftime("%Y%m01")
+        if earliest_item and isinstance(earliest_item, list) and earliest_item[0].get("date"):
+            earliest_date_str = str(earliest_item[0]["date"])[:8]
+            earliest_dt = datetime.strptime(earliest_date_str, "%Y%m%d")
+            if earliest_dt > s_dt:
+                s_dt = earliest_dt
 
-            if curr.month == 12:
-                next_month = datetime(curr.year + 1, 1, 1)
-            else:
-                next_month = datetime(curr.year, curr.month + 1, 1)
+            curr = datetime(s_dt.year, s_dt.month, 1)
+            while curr <= e_dt:
+                if curr.year == s_dt.year and curr.month == s_dt.month:
+                    q_s = s_dt.strftime("%Y%m%d")
+                else:
+                    q_s = curr.strftime("%Y%m01")
 
-            month_end = next_month - timedelta(days=1)
-            if month_end > e_dt:
-                q_e = e_dt.strftime("%Y%m%d")
-            else:
-                q_e = month_end.strftime("%Y%m%d")
+                if curr.month == 12:
+                    next_month = datetime(curr.year + 1, 1, 1)
+                else:
+                    next_month = datetime(curr.year, curr.month + 1, 1)
 
-            month_ranges.append((q_s, q_e))
-            curr = next_month
+                month_end = next_month - timedelta(days=1)
+                if month_end > e_dt:
+                    q_e = e_dt.strftime("%Y%m%d")
+                else:
+                    q_e = month_end.strftime("%Y%m%d")
+
+                month_ranges.append((q_s, q_e))
+                curr = next_month
 
         raw_records = []
         for q_s, q_e in month_ranges:
@@ -364,7 +373,6 @@ class StockDBProvider(BaseProvider):
                 frequency="1m",
                 fq=None,
                 max_retries=3,
-                retry_on_empty=True,
                 desc=f"拉取 1m K线 [{symbol}] {q_s}~{q_e}",
             ) or []
             if chunk:

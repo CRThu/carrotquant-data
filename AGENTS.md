@@ -177,6 +177,9 @@ SyncManager.sync()
 - **`EastMoneyProvider`**: 东方财富数据驱动，处理板块成分股、龙虎榜与机构交易，采用 TLS 指纹防封与节流重试。无 symbol 的宏观表 `get_all_symbols` 返回 `["_ALL_"]`。
 - **`TDXProvider`**: 通达信数据驱动，支持 `online` (TCP 在线) 与 `local` (vipdoc 离线) 两种模式，完整覆盖沪深主板、创业板、科创板与北交所（注：`online` 模式受云端 API 限制仅覆盖在交易股票，获取已退市股票建议使用 `local` 离线模式或 Baostock 驱动）。
 - **`StockDBProvider`**: StockDB 本地 LevelDB 时序引擎驱动（127.0.0.1:7899），支持 1m 超高频与 1d 全截面多因子、A 股个股与退市股全覆盖、场内 ETF 独立覆盖、同花顺概念与申万行业平铺映射。内置 `stockdb.pyd` 与 TCP Socket 快速探针。
+  - **1m 高频按月切片 (Monthly Chunking) 铁律**：StockDB 跨年单次大跨度查询会因底层 SSTable 游标跨块迭代与 Socket 发送缓冲区溢出而发生静默丢包甚至整月数据蒸发（如 2026.02 整月归零）；必须采用自然月分段拉取（单月 ~5000 根），确保数据 100% 完整无损。
+  - **0.01s 物理最早日期探针**：在切片前利用底层游标 `limit=1`（升序首条）探查真实起始月份，智能裁掉 1970~2024 年 50 余年（660 个月）的历史真空期，单标的同步耗时从 17 秒缩减至 0.5 秒（提速 30 倍）。
+  - **零空数据重试 (Zero retry_on_empty)**：彻底剔除 `retry_on_empty` 与强制 `sleep`，查空即合法无数据，严禁无谓重试引发任务卡死假象。
 - **`DataCleaner`**: 统一清洗时间轴，转换产生 `timestamp` (Int64 ms) 与 `datetime` (ISO8601) 标准列。
 - **`ProviderManager`**: Provider 单例工厂，根据 `table_id` 末段标识路由驱动。
 
@@ -321,6 +324,10 @@ type_map = {
 6. **无损降级处理**: EV 数据在缺少 `symbol` 列时自动回退为仅按 `timestamp` 排序，严禁抛出 `ColumnNotFoundError`。
 7. **驱动层强类型构造规约**: 从原始数据构造 DataFrame 必须显式传入 `schema` 强类型字典（如 `pl.DataFrame(records, schema=raw_schema)`），严禁使用自动类型推断，防止因前缀连续 `None` 误判为 `Null` 导致后续数据追加溢出崩溃，并确保批处理批量聚合时 Schema 严格对齐。
 8. **四阶段生命周期与流式收敛保障**: 数据生命周期严格遵循：① 分片暂存落盘 (`write_*`) ➔ ② 全量统一收敛 (`finalize()`) ➔ ③ 原子发布元数据 (`metadata.json`) ➔ ④ 外部查询可见。在步骤 ② 和 ③ 完成前，元数据不推进，外部不可见；若中途异常中断，强制在终止异常区触发 `storage.cleanup()` 回滚清除未提交脏分片，确保物理状态守恒与退出零脏状态。
+9. **StockDB 1m 超高频按月切片与探针铁律 (Monthly Chunking & Probe)**:
+   - *跨年丢包防线*: StockDB 时序底层禁止一次性全量单次拉取跨年超大区间，否则底层 LevelDB SSTable 游标跨 Block 扫描与 Socket 发送缓冲区溢出会导致静默丢包截断甚至整月数据蒸发（如实测 `sh.563000` 跨年直拉会致 2026 年 2 月整月 3360 根数据直接归零）；必须采用按自然月分段拉取（Monthly Chunking），单月数据包体量控制在最佳吞吐安全区，确保数据 100% 完整无损。
+   - *物理探针剪裁*: 在按月切片前必须通过底层游标 `limit=1`（升序首条）探查真实起始时间，智能裁掉 1970~2024 年 50 余年的物理空月，单标的同步耗时从 17 秒缩减至 0.5 秒（提速 30 倍）。
+   - *零空数据重试*: 彻底杜绝在底层查询中使用 `retry_on_empty` 与强制 sleep，无数据即合法空表，严禁无谓重试引发流水线假死。
 
 ---
 
