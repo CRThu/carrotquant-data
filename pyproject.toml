@@ -1,6 +1,6 @@
 [project]
 name = "carrotquant-data"
-version = "1.7.6"
+version = "1.7.7"
 description = "高性能、轻量级 A 股与指数金融数据增量同步与持久化流水线"
 readme = "README.md"
 authors = [
@@ -54,7 +54,7 @@ markers = [
 ]
 
 [tool.bumpversion]
-current_version = "1.7.6"
+current_version = "1.7.7"
 commit = true
 tag = true
 allow_dirty = true
