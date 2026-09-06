@@ -1,5 +1,7 @@
 import abc
+from typing import Any, Callable, Optional
 import polars as pl
+
 
 class StorageManager(abc.ABC):
     """

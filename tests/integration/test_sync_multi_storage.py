@@ -364,3 +364,81 @@ def test_sync_multi_storage_concurrent_formats(temp_data_dir):
                 parquet_df = parquet_storage.read_series(table_id, symbol, 2024)
                 assert len(csv_df) == len(parquet_df), \
                     f"Symbol {symbol} 的 CSV 和 Parquet 数据量应该一致"
+
+
+def test_sync_unclosed_data_overwritten_by_incremental_sync(temp_data_dir):
+    """
+    全链路集成测试：
+    验证 1.1~1.5 同步（1.5 包含未收盘暂存数据 close=10.0），
+    后续增量同步至 1.6（TaskPlanner 自动从 1.5 当天开始补齐权威 1.5 close=15.0 与 1.6 close=16.0），
+    经由 Anti-Join 覆盖落盘后，CSV 与 Parquet 双格式数据 100% 一致，
+    1.1~1.2 完好保留，1.5 成功刷新，1.6 成功追加。
+    """
+    from cq.data.entrypoints.python_api import read
+
+    table_id = "ashare.kline.1d.adj.baostock"
+
+    class OverlapProvider(BaseProvider):
+        def get_supported_tables(self):
+            return [table_id]
+        def get_all_symbols(self, tid):
+            return ["sh.600000"]
+        def get_table_category(self, tid):
+            return "timeseries"
+        def get_sort_keys(self, tid):
+            return ["timestamp"]
+        def fetch(self, tid, symbol, start_date, end_date, **kwargs):
+            # 若时间范围包含 1.6，说明是第二次增量拉取（提供 1.5 权威收盘与 1.6）
+            if end_date >= 1704524400000 or (isinstance(end_date, str) and "2024-01-06" in end_date):
+                return pl.DataFrame({
+                    "symbol": [symbol] * 2,
+                    "timestamp": [1704438000000, 1704524400000],  # 1.5, 1.6
+                    "datetime": ["2024-01-05T15:00:00.000", "2024-01-06T15:00:00.000"],
+                    "close": [15.0, 16.0],
+                })
+            else:
+                # 首次同步 1.1~1.5 (1.5 为未收盘盘中数据 close=10.0)
+                return pl.DataFrame({
+                    "symbol": [symbol] * 5,
+                    "timestamp": [
+                        1704092400000, 1704178800000, 1704265200000, 1704351600000, 1704438000000
+                    ],
+                    "datetime": [
+                        "2024-01-01T15:00:00.000", "2024-01-02T15:00:00.000",
+                        "2024-01-03T15:00:00.000", "2024-01-04T15:00:00.000",
+                        "2024-01-05T15:00:00.000",
+                    ],
+                    "close": [1.0, 2.0, 3.0, 4.0, 10.0],
+                })
+
+    with patch("cq.data.config.settings.settings.data_dir", str(temp_data_dir)):
+        sm = SyncManager()
+        prov = OverlapProvider()
+        with patch.object(sm.provider_mgr, "get_provider", return_value=prov):
+            # 1. 首次同步 1.1 ~ 1.5
+            sm.sync(table_id, ["csv", "parquet"], "2024-01-01", "2024-01-05")
+
+            # 2. 增量同步 1.1 ~ 1.6 (TaskPlanner 自动回退至 1.5 起始点补齐)
+            sm.sync(table_id, ["csv", "parquet"], "2024-01-01", "2024-01-06")
+
+            # 3. 验证 Python SDK read() 读取结果
+            df_pq = read(table_id, format="parquet")
+            df_csv = read(table_id, format="csv")
+
+            assert len(df_pq) == 6
+            assert len(df_csv) == 6
+
+            # 验证 1.1 与 1.2 完好保留
+            assert df_pq.filter(pl.col("timestamp") == 1704092400000)["close"].item() == 1.0
+            assert df_pq.filter(pl.col("timestamp") == 1704178800000)["close"].item() == 2.0
+            assert df_csv.filter(pl.col("timestamp") == 1704092400000)["close"].item() == 1.0
+            assert df_csv.filter(pl.col("timestamp") == 1704178800000)["close"].item() == 2.0
+
+            # 验证 1.5 盘中临时快照 (10.0) 被官方最终收盘价 (15.0) 成功刷掉替换
+            assert df_pq.filter(pl.col("timestamp") == 1704438000000)["close"].item() == 15.0
+            assert df_csv.filter(pl.col("timestamp") == 1704438000000)["close"].item() == 15.0
+
+            # 验证 1.6 成功写入
+            assert df_pq.filter(pl.col("timestamp") == 1704524400000)["close"].item() == 16.0
+            assert df_csv.filter(pl.col("timestamp") == 1704524400000)["close"].item() == 16.0
+

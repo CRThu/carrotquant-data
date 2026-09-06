@@ -40,7 +40,10 @@ def mock_stockdb_context(mock_rd):
     """默认全流程 Mock StockDB 模块与网络探针，保证测试与 CI 零外部进程依赖、纯净确定运行"""
     mock_mod = MagicMock()
     mock_mod.rd = mock_rd
+    mock_sdk = MagicMock()
+    mock_sdk.rd = mock_rd
     with patch("cq.data.provider.stockdb.provider.stockdb", mock_mod), \
+         patch("cq.data.provider.stockdb.provider.stock_sdk", mock_sdk), \
          patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True):
         yield
 
@@ -55,7 +58,8 @@ class TestStockDBSyncIntegration:
             {"code": "600000", "date": 20250102093100, "open": 10.05, "high": 10.2, "low": 10.0, "close": 10.15, "volume": 1200.0, "amount": 12100.0},
         ]
         mock_rd = MagicMock()
-        mock_rd.get.return_value = {"6": ["600000"]}
+        mock_rd.get_data.return_value = mock_records
+        mock_rd.get.return_value = MagicMock(do=lambda: {"6": ["600000"]})
         mock_rd.vals.return_value = mock_records
 
         with mock_stockdb_context(mock_rd), \
@@ -87,8 +91,8 @@ class TestStockDBSyncIntegration:
         ]
         mock_cum = [["复权:159919:20240101", 2.0]]
         mock_rd = MagicMock()
-        mock_rd.get.side_effect = lambda *args: {"1": ["159919"]} if args[0] == "股票代码" else MagicMock(get=lambda k: mock_cum)
-        mock_rd.vals.return_value = mock_kline
+        mock_rd.get_data.return_value = mock_kline
+        mock_rd.get.side_effect = lambda *args: MagicMock(do=lambda: {"1": ["159919"]}) if args[0] == "股票代码" else MagicMock(do=lambda: mock_cum)
 
         with mock_stockdb_context(mock_rd), \
              patch.object(
@@ -186,6 +190,7 @@ class TestStockDBSyncIntegration:
 
         mock_rd = MagicMock()
         mock_rd.get.return_value = {"5": ["501001"]}
+        mock_rd.get_data.return_value = mock_records
         mock_rd.vals.return_value = mock_records
 
         with mock_stockdb_context(mock_rd), \

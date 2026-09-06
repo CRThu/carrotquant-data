@@ -272,7 +272,7 @@ class ParquetStorage(StorageManager):
                 is_ts = self.category == "timeseries"
 
                 if is_ts:
-                    # TS 模式：采用“sym_ranges 微型字典流式覆盖 + 流式排序落盘” (O(1) 内存，零巨型 Hash 表)
+                    # TS 模式：基于 [symbol, timestamp] 对新分片构建 Anti-Join 流式剔除旧数据冲突行，再流式排序落盘 (O(新分片) 极低内存开销，keep="last" 语义)
                     col_order = list(base_schema.names())
                     # 新分片自身去重 (杜绝并发/重试写入分片主键重复)
                     new_unique = new_lazy.unique(subset=["symbol", "timestamp"], keep="last")
@@ -283,25 +283,11 @@ class ParquetStorage(StorageManager):
                         col_order = [c for c in base_schema.names() if c in valid_schema]
                         lazy_old = lazy_old.cast(valid_schema).select(col_order)
 
-                        # 计算新数据中各个标的的覆盖时间范围 (微型元数据表，仅几 KB，零内存开销)
-                        sym_ranges = (
-                            new_unique.select(["symbol", "timestamp"])
-                            .group_by("symbol")
-                            .agg([
-                                pl.col("timestamp").min().alias("_min_ts"),
-                                pl.col("timestamp").max().alias("_max_ts")
-                            ])
-                        )
-                        # 旧大表流式剔除覆盖区间，严格保证新数据 100% 覆盖旧数据 (keep="last" 语义)
-                        clean_old = (
-                            lazy_old
-                            .join(sym_ranges, on="symbol", how="left")
-                            .filter(
-                                pl.col("_min_ts").is_null() |
-                                (pl.col("timestamp") < pl.col("_min_ts")) |
-                                (pl.col("timestamp") > pl.col("_max_ts"))
-                            )
-                            .select(col_order)
+                        # 基于 [symbol, timestamp] 执行 Anti-Join，流式剔除被新数据覆盖的重复键 (O(新分片) 极低内存开销，keep="last" 语义)
+                        clean_old = lazy_old.join(
+                            new_unique.select(["symbol", "timestamp"]),
+                            on=["symbol", "timestamp"],
+                            how="anti",
                         )
                         all_sources = [clean_old, new_unique.select(col_order)]
                     else:

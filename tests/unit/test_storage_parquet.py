@@ -725,3 +725,113 @@ def test_parquet_finalize_anti_join_overwrite_and_progress_callback(tmp_path: Pa
     assert len(row_000003) == 1
     assert row_000003["close"][0] == 30.0
 
+
+def test_parquet_finalize_anti_join_preserves_intermediate_bars(tmp_path: Path):
+    """
+    第一性原理防回退测试：
+    验证增量数据仅包含某标的区间两端 (min/max) 时，旧数据库中位于中间的条目绝不会被错误剔除。
+    """
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.intermediate_gap"
+
+    # 旧数据包含 T=10, 20, 30 三条
+    old_df = pl.DataFrame({
+        "symbol": ["sh.600000"] * 3,
+        "timestamp": [1735689600000, 1735689620000, 1735689640000],
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:00:20+08:00", "2025-01-01T08:00:40+08:00"],
+        "close": [10.0, 20.0, 30.0],
+    })
+    storage.write_series(table_id, old_df)
+    storage.finalize(table_id, mode="overwrite")
+
+    # 增量 patch 仅有 T=10 (更新 close=99.0) 和 T=40 (新条目 close=40.0)
+    # T=20 和 T=30 位于 [T=10, T=40] 之间，且不在 patch 中，必须被 100% 完整保留！
+    patch_df = pl.DataFrame({
+        "symbol": ["sh.600000"] * 2,
+        "timestamp": [1735689600000, 1735689680000],
+        "datetime": ["2025-01-01T08:00:00+08:00", "2025-01-01T08:01:20+08:00"],
+        "close": [99.0, 40.0],
+    })
+    storage.write_series(table_id, patch_df)
+    storage.finalize(table_id, mode="append")
+
+    res = pl.read_parquet(tmp_path / table_id / "year=2025" / "data.parquet")
+    # 总条数必须为 4 条 (T=10 更新为 99.0, T=20 保持 20.0, T=30 保持 30.0, T=40 新增 40.0)
+    assert len(res) == 4
+    assert res["timestamp"].to_list() == [1735689600000, 1735689620000, 1735689640000, 1735689680000]
+    assert res["close"].to_list() == [99.0, 20.0, 30.0, 40.0]
+
+
+def test_parquet_unclosed_bar_overwritten_by_subsequent_sync(tmp_path: Path):
+    """
+    业务场景实测验证：
+    1. 初次同步 1.1~1.5 (其中 1.5 包含未收盘/盘中暂存数据 close=10.0)；
+    2. 后续重叠同步 1.3~1.6 (其中 1.5 包含官方最终收盘数据 close=15.0，且新增 1.6 close=16.0)；
+    3. 验证 1.1~1.2 完整保留，1.5 成功刷新覆盖为 15.0，1.6 追加，总数据无遗漏且无残留。
+    """
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1d.unclosed_overwrite"
+
+    # 1. 第一次同步 1.1 ~ 1.5 (1.5 盘中未收盘数据 close=10.0)
+    df_batch1 = pl.DataFrame({
+        "symbol": ["sh.600000"] * 5,
+        "timestamp": [
+            1735689600000,  # 2025-01-01
+            1735776000000,  # 2025-01-02
+            1735862400000,  # 2025-01-03
+            1735948800000,  # 2025-01-04
+            1736035200000,  # 2025-01-05 (盘中暂存未收盘数据 close=10.0)
+        ],
+        "datetime": [
+            "2025-01-01T15:00:00+08:00",
+            "2025-01-02T15:00:00+08:00",
+            "2025-01-03T15:00:00+08:00",
+            "2025-01-04T15:00:00+08:00",
+            "2025-01-05T15:00:00+08:00",
+        ],
+        "close": [1.0, 2.0, 3.0, 4.0, 10.0],
+    })
+    storage.write_series(table_id, df_batch1)
+    storage.finalize(table_id, mode="overwrite")
+
+    # 2. 第二次重叠同步 1.3 ~ 1.6 (1.5 权威最终收盘价 close=15.0, 1.6 close=16.0)
+    df_batch2 = pl.DataFrame({
+        "symbol": ["sh.600000"] * 4,
+        "timestamp": [
+            1735862400000,  # 2025-01-03
+            1735948800000,  # 2025-01-04
+            1736035200000,  # 2025-01-05 (官方最终收盘数据 close=15.0)
+            1736121600000,  # 2025-01-06 (新收盘数据 close=16.0)
+        ],
+        "datetime": [
+            "2025-01-03T15:00:00+08:00",
+            "2025-01-04T15:00:00+08:00",
+            "2025-01-05T15:00:00+08:00",
+            "2025-01-06T15:00:00+08:00",
+        ],
+        "close": [3.0, 4.0, 15.0, 16.0],
+    })
+    storage.write_series(table_id, df_batch2)
+    storage.finalize(table_id, mode="append")
+
+    # 3. 校验最终落盘数据
+    res = pl.read_parquet(tmp_path / table_id / "year=2025" / "data.parquet")
+    assert len(res) == 6
+    assert res["datetime"].to_list() == [
+        "2025-01-01T15:00:00+08:00",
+        "2025-01-02T15:00:00+08:00",
+        "2025-01-03T15:00:00+08:00",
+        "2025-01-04T15:00:00+08:00",
+        "2025-01-05T15:00:00+08:00",
+        "2025-01-06T15:00:00+08:00",
+    ]
+    # 验证 1.1~1.2 完整保留
+    assert res.filter(pl.col("datetime") == "2025-01-01T15:00:00+08:00")["close"][0] == 1.0
+    assert res.filter(pl.col("datetime") == "2025-01-02T15:00:00+08:00")["close"][0] == 2.0
+    # 验证 1.5 盘中旧值 10.0 已被权威收盘价 15.0 成功刷掉替换
+    assert res.filter(pl.col("datetime") == "2025-01-05T15:00:00+08:00")["close"][0] == 15.0
+    # 验证 1.6 成功追加
+    assert res.filter(pl.col("datetime") == "2025-01-06T15:00:00+08:00")["close"][0] == 16.0
+
+
+
