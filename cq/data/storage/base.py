@@ -78,10 +78,22 @@ class StorageManager(abc.ABC):
         pass
 
 
-    def finalize(self, table_id: str, mode: str = "append", sort_keys: list[str] = None):
+    def finalize(
+        self,
+        table_id: str,
+        mode: str = "append",
+        sort_keys: list[str] = None,
+        progress_callback: Any = None,
+    ):
         """
         收敛暂存批次并执行流式去重与排序落盘。
         默认空操作，供需要分片合并的引擎 (如 ParquetStorage) 重写。
+        
+        Args:
+            table_id: 表 ID
+            mode: 写入模式 ("append" 或 "overwrite")
+            sort_keys: 排序列列表
+            progress_callback: 进度回调函数，签名 Callable[[str, int, int], None] (阶段/年份, 当前项, 总项数)
         """
         pass
 

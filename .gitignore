@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+!cq/data/provider/stockdb/*.pyd
 
 
 # Project specific

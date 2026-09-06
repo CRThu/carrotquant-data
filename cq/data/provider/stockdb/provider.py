@@ -1,6 +1,8 @@
+import sys
+import time
 import socket
-from datetime import datetime
-from typing import Any, List, Dict, Optional, Set
+from datetime import datetime, timedelta
+from typing import Any, List, Dict, Optional, Set, Callable
 import polars as pl
 from loguru import logger
 
@@ -9,12 +11,10 @@ from cq.data.provider.data_cleaner import DataCleaner
 from cq.data.utils.time_utils import ts_to_str
 
 try:
-    from cq.data.provider.stockdb import stockdb
+    from . import stockdb, stock_sdk
 except ImportError:
-    try:
-        import stockdb
-    except ImportError:
-        stockdb = None
+    stockdb = None
+    stock_sdk = None
 
 
 def normalize_symbol(code: str) -> str:
@@ -73,23 +73,65 @@ class StockDBProvider(BaseProvider):
         "aetf.adj_factor.stockdb": "event",
     }
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 7899):
+    def __init__(self, host: str = "127.0.0.1", port: int = 7899, timeout: int = 60):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self._rd = None
 
     def _ensure_connected(self):
         """确保 StockDB 二进制模块与 TCP 服务均可用，未就绪时立即 Fail-Fast 抛出强类型异常"""
-        if stockdb is None:
+        if stockdb is None or stock_sdk is None:
             raise ImportError(
-                "未能成功导入 'stockdb' 二进制模块。请确保 stockdb.pyd 位于当前环境且支持当前操作系统架构。"
+                "未能成功导入 'stockdb' 二进制模块或 'stock_sdk'。请确保其位于当前环境且支持当前操作系统架构。"
             )
         if not check_stockdb_connection(self.host, self.port):
             raise ConnectionRefusedError(
                 f"无法连接至 StockDB 服务端 ({self.host}:{self.port})。请先启动 stockdb.exe 后再执行同步。"
             )
         if self._rd is None:
-            self._rd = stockdb.rd
+            # 显式初始化底层的连接与 socket_timeout=60（逻辑无限，防止极端情况下因默认 1s 超时触发静默空包）
+            stock_sdk.init(self.host, self.port, socket_timeout=self.timeout, warm=False)
+            self._rd = stock_sdk.rd
+
+    def _safe_query(
+        self,
+        query_func: Callable,
+        *args,
+        max_retries: int = 3,
+        retry_on_empty: bool = False,
+        desc: str = "query",
+        **kwargs,
+    ) -> Any:
+        """
+        具备自动重试与防静默空包的底层通信调用包装器。
+        
+        - 对底层 TimeoutError / ConnectionError / socket.error 等所有异常进行指数退避自动重试（默认 3 次）；
+        - 重试耗尽后显式记录 Error 日志并抛出强类型异常，绝不静默吞错；
+        - 可选针对空结果进行二次确认（防止底层 LevelDB 游标偶发抖动）。
+        """
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                res = query_func(*args, **kwargs)
+                # 若需要对空结果二次确认（防底层游标瞬态抖动）
+                if retry_on_empty and not res and attempt == 1:
+                    time.sleep(0.05)
+                    continue
+                return res
+            except Exception as e:
+                last_exc = e
+                if attempt == max_retries:
+                    logger.error(f"StockDB {desc} 失败，已耗尽 {max_retries} 次重试: {e}")
+                    raise
+                logger.warning(
+                    f"StockDB {desc} 发生异常 (第 {attempt}/{max_retries} 次重试): {e}"
+                )
+                time.sleep(0.1 * attempt)
+        if last_exc:
+            raise last_exc
+        return []
+
 
     def get_supported_tables(self) -> List[str]:
         """返回 StockDB 驱动支持的所有 table_id 列表"""
@@ -129,7 +171,10 @@ class StockDBProvider(BaseProvider):
             return ["_ALL_"]
 
         self._ensure_connected()
-        code_dict = self._rd.get("股票代码") or {}
+        code_dict = self._safe_query(
+            lambda: self._rd.get("股票代码").do(),
+            desc="获取股票代码清单",
+        ) or {}
 
         if table_id.startswith("ashare.kline"):
             symbols_set: Set[str] = set()
@@ -139,11 +184,15 @@ class StockDBProvider(BaseProvider):
             
             # 合并退市股票列表 (排除基金等代码)
             try:
-                retired = self._rd.vals("退市*") or []
+                retired = self._safe_query(
+                    lambda: self._rd.vals("退市*").do(),
+                    desc="获取退市股票清单",
+                ) or []
                 for r in retired:
                     r_str = str(r).strip()
                     if r_str and not r_str.startswith(("1", "5")):
                         symbols_set.add(r_str)
+
             except Exception as e:
                 logger.warning(f"Failed to fetch retired stocks from StockDB: {e}")
 
@@ -221,11 +270,19 @@ class StockDBProvider(BaseProvider):
         raw_code = strip_symbol_prefix(symbol)
         norm_symbol = normalize_symbol(symbol)
 
-        s_val = start_date.replace("-", "")
-        e_val = end_date.replace("-", "")
-        time_query = f"{s_val}>{e_val}"
+        s_val = start_date.replace("-", "") if start_date else None
+        e_val = end_date.replace("-", "") if end_date else None
 
-        raw_records = self._rd.vals("日k", raw_code, time_query) or []
+        raw_records = self._safe_query(
+            self._rd.get_data,
+            raw_code,
+            start=s_val,
+            end=e_val,
+            frequency="1d",
+            fq=None,
+            max_retries=3,
+            desc=f"拉取日K线 [{symbol}] {start_date}~{end_date}",
+        ) or []
         records = [r for r in raw_records if isinstance(r, dict)]
 
         raw_schema = {
@@ -265,16 +322,54 @@ class StockDBProvider(BaseProvider):
         """
         拉取 1 分钟线高频行情。
         
+        遵从官方公开 rd.get_data 接口；针对 1m 超高频数据按自然月（Monthly Chunking）分段拉取，
+        彻底消除底层 LevelDB 迭代器跨季度/跨年份的单次游标截断缺陷。
         时间戳格式为 14 位整数 (YYYYMMDDHHMMSS)，直接通过 time_shift_hours=0 标准化。
         """
         raw_code = strip_symbol_prefix(symbol)
         norm_symbol = normalize_symbol(symbol)
 
-        s_val = start_date.replace("-", "") + "000000" if len(start_date.replace("-", "")) == 8 else start_date
-        e_val = end_date.replace("-", "") + "235959" if len(end_date.replace("-", "")) == 8 else end_date
-        time_query = f"{s_val}>{e_val}"
+        s_dt = datetime.strptime(start_date[:10], "%Y-%m-%d") if start_date else datetime(1970, 1, 1)
+        e_dt = datetime.strptime(end_date[:10], "%Y-%m-%d") if end_date else datetime.now()
 
-        raw_records = self._rd.vals("分钟k", raw_code, time_query) or []
+        month_ranges = []
+        curr = datetime(s_dt.year, s_dt.month, 1)
+        while curr <= e_dt:
+            if curr.year == s_dt.year and curr.month == s_dt.month:
+                q_s = s_dt.strftime("%Y%m%d")
+            else:
+                q_s = curr.strftime("%Y%m01")
+
+            if curr.month == 12:
+                next_month = datetime(curr.year + 1, 1, 1)
+            else:
+                next_month = datetime(curr.year, curr.month + 1, 1)
+
+            month_end = next_month - timedelta(days=1)
+            if month_end > e_dt:
+                q_e = e_dt.strftime("%Y%m%d")
+            else:
+                q_e = month_end.strftime("%Y%m%d")
+
+            month_ranges.append((q_s, q_e))
+            curr = next_month
+
+        raw_records = []
+        for q_s, q_e in month_ranges:
+            chunk = self._safe_query(
+                self._rd.get_data,
+                raw_code,
+                start=q_s,
+                end=q_e,
+                frequency="1m",
+                fq=None,
+                max_retries=3,
+                retry_on_empty=True,
+                desc=f"拉取 1m K线 [{symbol}] {q_s}~{q_e}",
+            ) or []
+            if chunk:
+                raw_records.extend(chunk)
+
         records = [r for r in raw_records if isinstance(r, dict)]
 
         raw_schema = {
@@ -307,7 +402,10 @@ class StockDBProvider(BaseProvider):
         is_aetf = table_id.startswith("aetf")
         raw_target_code = strip_symbol_prefix(symbol) if symbol != "_ALL_" else None
 
-        raw_fq = self._rd.get("复权*").get("cum") or []
+        raw_fq = self._safe_query(
+            lambda: self._rd.get("复权*").do(),
+            desc="拉取全量复权因子",
+        ) or []
         rows = []
 
         s_clean = start_date.replace("-", "") if start_date else "19700101"
@@ -317,7 +415,8 @@ class StockDBProvider(BaseProvider):
             if not isinstance(item, (list, tuple)) or len(item) < 2:
                 continue
             key_str = str(item[0])
-            cum_val = float(item[1])
+            val_obj = item[1]
+            cum_val = float(val_obj.get("cum", val_obj)) if isinstance(val_obj, dict) else float(val_obj)
             parts = key_str.split(":")
             if len(parts) < 3:
                 continue
@@ -368,8 +467,12 @@ class StockDBProvider(BaseProvider):
         
         平铺输出结构: [board_code, board_name, category, symbol]
         """
-        boards = self._rd.get("板块*").do() or []
+        boards = self._safe_query(
+            lambda: self._rd.get("板块*").do(),
+            desc="拉取概念板块数据",
+        ) or []
         rows = []
+
 
         for item in boards:
             if not isinstance(item, (list, tuple)) or len(item) < 2:
@@ -414,7 +517,10 @@ class StockDBProvider(BaseProvider):
         
         平铺输出结构: [board_code, board_name, category, symbol]
         """
-        boards = self._rd.get("板块*").do() or []
+        boards = self._safe_query(
+            lambda: self._rd.get("板块*").do(),
+            desc="拉取行业板块数据",
+        ) or []
         rows = []
 
         valid_categories = {"申万一级", "申万二级", "申万三级"}

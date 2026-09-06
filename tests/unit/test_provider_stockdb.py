@@ -36,18 +36,28 @@ def _reset_provider_manager():
     ProviderManager._providers = {}
 
 
+class MockQueryResult(list):
+    def do(self):
+        return self
+
+
+class MockDictResult(dict):
+    def do(self):
+        return self
+
+
 class MockStockDBRd:
     """模拟 stockdb.pyd 中的 rd 对象"""
     def __init__(self):
-        self.code_dict = {
+        self.code_dict = MockDictResult({
             "0": ["000001", "000002"],
             "3": ["300001"],
             "6": ["600000", "600519"],
             "9": ["900901"],
             "1": ["159919", "160105"],
             "5": ["510300", "588000"],
-        }
-        self.retired_list = ["600421", "000003"]
+        })
+        self.retired_list = MockQueryResult(["600421", "000003"])
         self.daily_kline = [
             {
                 "code": "600000", "date": 20240102, "open": 6.63, "high": 6.65, "low": 6.60, "close": 6.60,
@@ -63,13 +73,13 @@ class MockStockDBRd:
                 "volume": 241900.0, "amount": 2491570.0
             }
         ]
-        self.cum_factors = [
+        self.cum_factors = MockQueryResult([
             ["复权:000001:19910430", 1.41],
             ["复权:600000:20240102", 10.5],
             ["复权:510300:20240105", 1.25],
             ["复权:159919:20240105", 1.10],
-        ]
-        self.boards = [
+        ])
+        self.boards = MockQueryResult([
             ["板块:概念_人工智能:300001", {
                 "code": "BK0800", "name": "人工智能", "category": "概念", "symbols": ["000001", "600000"]
             }],
@@ -79,19 +89,15 @@ class MockStockDBRd:
             ["板块:行业_国有大型银行:801192", {
                 "code": "801192.SI", "name": "国有大型银行", "category": "申万二级", "symbols": ["600000"]
             }],
-        ]
+        ])
 
     def get(self, *args):
         if args[0] == "股票代码":
             return self.code_dict
         elif args[0] == "复权*":
-            mock_cum = MagicMock()
-            mock_cum.get.return_value = self.cum_factors
-            return mock_cum
+            return self.cum_factors
         elif args[0] == "板块*":
-            mock_bk = MagicMock()
-            mock_bk.do.return_value = self.boards
-            return mock_bk
+            return self.boards
         return None
 
     def vals(self, *args):
@@ -103,14 +109,22 @@ class MockStockDBRd:
             return self.minute_kline
         return []
 
+    def get_data(self, code, start=None, end=None, frequency="1d", fq=None, **kwargs):
+        if frequency == "1d":
+            return list(self.daily_kline)
+        elif frequency == "1m":
+            return list(self.minute_kline)
+        return []
+
 
 @pytest.fixture
 def mock_stockdb_env():
     """Mock StockDB 的模块与底层 socket 探针"""
     mock_rd = MockStockDBRd()
-    with patch("cq.data.provider.stockdb.provider.stockdb") as mock_mod, \
+    mock_sdk = MagicMock(rd=mock_rd)
+    with patch("cq.data.provider.stockdb.provider.stockdb", MagicMock(rd=mock_rd)), \
+         patch("cq.data.provider.stockdb.provider.stock_sdk", mock_sdk), \
          patch("cq.data.provider.stockdb.provider.check_stockdb_connection", return_value=True):
-        mock_mod.rd = mock_rd
         yield mock_rd
 
 
@@ -307,3 +321,38 @@ class TestStockDBExceptionsAndEmptyData:
         assert df.schema["open"] == pl.Float64
         assert df.schema["turnover_rate"] == pl.Float64
         assert df.schema["total_mv"] == pl.Float64
+
+    def test_safe_query_retries_on_transient_exception(self, mock_stockdb_env):
+        """验证遇到临时异常时，自动重试并最终成功"""
+        p = StockDBProvider()
+        calls = 0
+
+        def flaky_func():
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise TimeoutError("Socket temporary timeout")
+            return [{"test": 123}]
+
+        res = p._safe_query(flaky_func, max_retries=3, desc="flaky_test")
+        assert calls == 3
+        assert res == [{"test": 123}]
+
+    def test_safe_query_exhausted_retries_raises(self, mock_stockdb_env):
+        """验证耗尽 3 次重试后，正确抛出异常，绝不静默吞错"""
+        p = StockDBProvider()
+        calls = 0
+
+        def dead_func():
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("Persistent network down")
+
+        with pytest.raises(ConnectionError, match="Persistent network down"):
+            p._safe_query(dead_func, max_retries=3, desc="dead_test")
+        assert calls == 3
+
+    def test_socket_timeout_default_is_60s(self, mock_stockdb_env):
+        """验证 StockDBProvider 默认将 socket_timeout 设置为 60 秒"""
+        p = StockDBProvider()
+        assert p.timeout == 60

@@ -174,7 +174,16 @@ class SyncManager:
                 sort_keys = provider.get_sort_keys(table_id) if category == "event" else None
                 for fmt, storage in storages.items():
                     logger.info(f"[*] Finalizing staged partitions for {table_id} ({fmt}, mode={mode_to_use})...")
-                    storage.finalize(table_id, mode=mode_to_use, sort_keys=sort_keys)
+                    def _on_finalize_progress(stage_name: str, cur: int, total: int):
+                        msg = f"[收敛落盘] 正在合并 {stage_name} ({cur}/{total})..."
+                        sync_tracker.update_progress(table_id, current=total_tasks, total=total_tasks, message=msg)
+
+                    storage.finalize(
+                        table_id,
+                        mode=mode_to_use,
+                        sort_keys=sort_keys,
+                        progress_callback=_on_finalize_progress,
+                    )
 
             # 统一更新元数据水位线，防止中途中断导致水位线虚高
             for fmt, storage in storages.items():
@@ -230,6 +239,15 @@ class SyncManager:
         schema_dict = old_metadata.get("schema", {}) if old_metadata else {}
         if last_success_df is not None:
             schema_dict = {k: str(v) for k, v in last_success_df.schema.items()}
+        elif not schema_dict:
+            try:
+                table_path = Path(self.data_dir) / format / table_id
+                sample_pqs = list(table_path.glob("year=*/data.parquet")) + list(table_path.glob("data.parquet"))
+                if sample_pqs:
+                    s_schema = pl.scan_parquet(str(sample_pqs[0])).collect_schema()
+                    schema_dict = {k: str(v) for k, v in s_schema.items()}
+            except Exception:
+                pass
         
         # 6. 根据 category 分类构建统计结构
         category = storage.category

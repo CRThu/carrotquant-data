@@ -645,3 +645,83 @@ def test_parquet_storage_edge_cases_and_defense(tmp_path: Path):
     non_existent_table = "test.parquet.non_existent"
     storage_ts.finalize(non_existent_table)
     storage_ts.cleanup(non_existent_table)
+
+
+def test_parquet_finalize_anti_join_overwrite_and_progress_callback(tmp_path: Path):
+    """
+    深度验证：
+    1. mode="append" 且旧文件存在时，新数据对旧数据精准覆盖 (Anti-Join keep="last" 语义)
+    2. progress_callback 进度回调函数在收敛落盘时被准确触发
+    """
+    storage = ParquetStorage(data_dir=str(tmp_path), category="timeseries")
+    table_id = "test.kline.1m.anti_join_test"
+
+    # 1. 模拟旧主库：2025年有 000001 和 000002 两个标的，各 2 条历史记录 (close=10.0)
+    old_df = pl.DataFrame({
+        "symbol": ["000001", "000001", "000002", "000002"],
+        "timestamp": [1735689600000, 1735689660000, 1735689600000, 1735689660000],
+        "datetime": [
+            "2025-01-01T08:00:00+08:00",
+            "2025-01-01T08:01:00+08:00",
+            "2025-01-01T08:00:00+08:00",
+            "2025-01-01T08:01:00+08:00",
+        ],
+        "close": [10.0, 10.0, 20.0, 20.0],
+    })
+    storage.write_series(table_id, old_df)
+    storage.finalize(table_id, mode="overwrite")
+
+    # 2. 模拟增量同步新分片：
+    # 000001 在 1735689660000 发生修正 (close 从 10.0 覆盖为 99.0)，并新增 1735689720000 (close=100.0)
+    # 000003 为全新加入标的
+    patch_df = pl.DataFrame({
+        "symbol": ["000001", "000001", "000003"],
+        "timestamp": [1735689660000, 1735689720000, 1735689600000],
+        "datetime": [
+            "2025-01-01T08:01:00+08:00",
+            "2025-01-01T08:02:00+08:00",
+            "2025-01-01T08:00:00+08:00",
+        ],
+        "close": [99.0, 100.0, 30.0],
+    })
+    storage.write_series(table_id, patch_df)
+
+    progress_records = []
+    def record_progress(stage: str, cur: int, total: int):
+        progress_records.append((stage, cur, total))
+
+    # 3. 执行 finalize(mode="append")，带 progress_callback
+    storage.finalize(table_id, mode="append", progress_callback=record_progress)
+
+    # 验证 progress_callback 被触发
+    assert len(progress_records) == 1
+    assert progress_records[0] == ("year=2025", 1, 1)
+
+    # 4. 验证合并后结果
+    res = pl.read_parquet(tmp_path / table_id / "year=2025" / "data.parquet")
+    
+    # 总行数：旧4条 - 重叠1条 + 新3条 = 6条
+    assert len(res) == 6
+
+    # 验证 000001 在 1735689660000 的 close 已经被新数据 99.0 覆盖
+    overwritten_row = res.filter(
+        (pl.col("symbol") == "000001") & (pl.col("timestamp") == 1735689660000)
+    )
+    assert len(overwritten_row) == 1
+    assert overwritten_row["close"][0] == 99.0
+
+    # 验证未被重叠的 000001 第一条 (close=10.0) 和 000002 依然完整保留
+    row_000001_first = res.filter(
+        (pl.col("symbol") == "000001") & (pl.col("timestamp") == 1735689600000)
+    )
+    assert row_000001_first["close"][0] == 10.0
+
+    row_000002 = res.filter(pl.col("symbol") == "000002")
+    assert len(row_000002) == 2
+    assert row_000002["close"].to_list() == [20.0, 20.0]
+
+    # 验证全新标的 000003 正确补入
+    row_000003 = res.filter(pl.col("symbol") == "000003")
+    assert len(row_000003) == 1
+    assert row_000003["close"][0] == 30.0
+

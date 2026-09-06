@@ -1,8 +1,11 @@
 import os
 import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
+from typing import Any, Callable
+from loguru import logger
 import polars as pl
 from .base import StorageManager
 from ..service.metadata_manager import MetadataManager
@@ -181,10 +184,17 @@ class ParquetStorage(StorageManager):
                 part_path = stage_dir / f"part_{uuid.uuid4().hex}.parquet"
                 patch_df.write_parquet(part_path, compression="zstd")
 
-    def finalize(self, table_id: str, mode: str = "append", sort_keys: list[str] = None):
+    def finalize(
+        self,
+        table_id: str,
+        mode: str = "append",
+        sort_keys: list[str] = None,
+        progress_callback: Any = None,
+    ):
         """
-        收敛所有暂存分片 (.staging) 并基于流式管道 (sink_parquet) 执行一次性落盘。
-        彻底消除批处理中每批重复重写大文件的 O(N^2) 写放大与全内存 OOM 隐患。
+        收敛所有暂存分片 (.staging) 并基于流式管道 (sink_parquet) 与分治 Anti-Join 执行一次性落盘。
+        彻底消除批处理中每批重复重写大文件的 O(N^2) 写放大，且通过 Anti-Join 规避巨型哈希表 OOM。
+        同时严格遵循 keep="last" 契约，确保新数据精准覆盖旧数据。
         """
         with self._lock:
             # 1. 检查平铺模式的暂存目录
@@ -192,21 +202,33 @@ class ParquetStorage(StorageManager):
             if flat_staging.exists():
                 staging_files = sorted(list(flat_staging.glob("*.parquet")))
                 if staging_files:
-                    lazy_stages = [pl.scan_parquet(f) for f in staging_files]
+                    if progress_callback:
+                        progress_callback("平铺数据", 1, 1)
+
                     target_path = self._get_flat_event_path(table_id)
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
 
+                    lazy_stages = [pl.scan_parquet(f) for f in staging_files]
                     base_schema = lazy_stages[0].collect_schema()
+                    all_new = [ls.cast(base_schema) for ls in lazy_stages]
+                    new_lazy = pl.concat(all_new).unique(subset=None, keep="last")
+
                     if mode == "append" and target_path.exists():
                         lazy_old = pl.scan_parquet(target_path)
                         valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
                         lazy_old = lazy_old.cast(valid_schema)
-                        all_lazy = [lazy_old] + [ls.cast(valid_schema) for ls in lazy_stages]
+                        col_order = [c for c in base_schema.names() if c in valid_schema]
+                        anti_keys = sort_keys if sort_keys else [k for k in base_schema.names() if k in valid_schema]
+                        if anti_keys:
+                            new_key_set = new_lazy.select(anti_keys).unique()
+                            clean_old = lazy_old.join(new_key_set, on=anti_keys, how="anti").select(col_order)
+                            q = pl.concat([clean_old, new_lazy.select(col_order)])
+                        else:
+                            q = pl.concat([lazy_old.select(col_order), new_lazy.select(col_order)]).unique(subset=None, keep="last")
                     else:
-                        all_lazy = [ls.cast(base_schema) for ls in lazy_stages]
+                        q = new_lazy
 
-                    q = pl.concat(all_lazy).unique(subset=None, keep="last")
                     if sort_keys:
                         q = q.sort(sort_keys)
                     q.sink_parquet(tmp_path)
@@ -218,45 +240,102 @@ class ParquetStorage(StorageManager):
             if not table_dir.exists():
                 return
 
-            for year_dir in sorted(table_dir.glob("year=*")):
-                if not year_dir.is_dir():
-                    continue
+            year_dirs = [
+                yd for yd in sorted(table_dir.glob("year=*"))
+                if yd.is_dir() and (yd / ".staging").exists() and list((yd / ".staging").glob("*.parquet"))
+            ]
+            total_years = len(year_dirs)
+
+            for idx, year_dir in enumerate(year_dirs, start=1):
+                year_name = year_dir.name
                 stage_dir = year_dir / ".staging"
-                if not stage_dir.exists():
+                staging_files = sorted(list(stage_dir.glob("*.parquet")))
+                if not staging_files:
+                    shutil.rmtree(stage_dir, ignore_errors=True)
                     continue
 
-                staging_files = sorted(list(stage_dir.glob("*.parquet")))
-                if staging_files:
-                    lazy_stages = [pl.scan_parquet(f) for f in staging_files]
-                    target_path = year_dir / "data.parquet"
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
+                if progress_callback:
+                    progress_callback(year_name, idx, total_years)
 
-                    base_schema = lazy_stages[0].collect_schema()
+                logger.info(f"[*] [收敛落盘] 正在合并 {table_id} {year_name} (分片数: {len(staging_files)}, 进度: {idx}/{total_years})...")
+                t_start = time.time()
+
+                lazy_stages = [pl.scan_parquet(f) for f in staging_files]
+                target_path = year_dir / "data.parquet"
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = target_path.with_name(f".tmp_{target_path.stem}_{uuid.uuid4().hex[:8]}.tmp")
+
+                base_schema = lazy_stages[0].collect_schema()
+                all_new = [ls.cast(base_schema) for ls in lazy_stages]
+                new_lazy = pl.concat(all_new)
+
+                is_ts = self.category == "timeseries"
+
+                if is_ts:
+                    # TS 模式：采用“sym_ranges 微型字典流式覆盖 + 流式排序落盘” (O(1) 内存，零巨型 Hash 表)
+                    col_order = list(base_schema.names())
+                    # 新分片自身去重 (杜绝并发/重试写入分片主键重复)
+                    new_unique = new_lazy.unique(subset=["symbol", "timestamp"], keep="last")
+
+                    if mode == "append" and target_path.exists():
+                        lazy_old = pl.scan_parquet(target_path)
+                        valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
+                        col_order = [c for c in base_schema.names() if c in valid_schema]
+                        lazy_old = lazy_old.cast(valid_schema).select(col_order)
+
+                        # 计算新数据中各个标的的覆盖时间范围 (微型元数据表，仅几 KB，零内存开销)
+                        sym_ranges = (
+                            new_unique.select(["symbol", "timestamp"])
+                            .group_by("symbol")
+                            .agg([
+                                pl.col("timestamp").min().alias("_min_ts"),
+                                pl.col("timestamp").max().alias("_max_ts")
+                            ])
+                        )
+                        # 旧大表流式剔除覆盖区间，严格保证新数据 100% 覆盖旧数据 (keep="last" 语义)
+                        clean_old = (
+                            lazy_old
+                            .join(sym_ranges, on="symbol", how="left")
+                            .filter(
+                                pl.col("_min_ts").is_null() |
+                                (pl.col("timestamp") < pl.col("_min_ts")) |
+                                (pl.col("timestamp") > pl.col("_max_ts"))
+                            )
+                            .select(col_order)
+                        )
+                        all_sources = [clean_old, new_unique.select(col_order)]
+                    else:
+                        all_sources = [new_unique.select(col_order)]
+
+                    q = pl.concat(all_sources).sort(["symbol", "timestamp"])
+                else:
+                    # EV 模式：遵循协议契约执行全行去重 (subset=None)
                     if mode == "append" and target_path.exists():
                         lazy_old = pl.scan_parquet(target_path)
                         valid_schema = {k: v for k, v in base_schema.items() if k in lazy_old.collect_schema().names()}
                         lazy_old = lazy_old.cast(valid_schema)
-                        all_lazy = [lazy_old] + [ls.cast(valid_schema) for ls in lazy_stages]
+                        col_order = [c for c in base_schema.names() if c in valid_schema]
+                        q = pl.concat([lazy_old.select(col_order), new_lazy.select(col_order)]).unique(subset=None, keep="last")
                     else:
-                        all_lazy = [ls.cast(base_schema) for ls in lazy_stages]
+                        q = new_lazy.unique(subset=None, keep="last")
 
-                    is_ts = self.category == "timeseries"
-                    subset = ["symbol", "timestamp"] if is_ts else None
-                    q = pl.concat(all_lazy).unique(subset=subset, keep="last")
+                    if sort_keys:
+                        q = q.sort(sort_keys)
+                    elif "timestamp" in q.collect_schema().names():
+                        q = q.sort(["timestamp"])
 
-                    if is_ts:
-                        q = q.sort(["symbol", "timestamp"])
-                    else:
-                        if sort_keys:
-                            q = q.sort(sort_keys)
-                        elif "timestamp" in q.collect_schema().names():
-                            q = q.sort(["timestamp"])
-
-                    q.sink_parquet(tmp_path)
-                    os.replace(tmp_path, target_path)
-
+                q.sink_parquet(tmp_path)
+                os.replace(tmp_path, target_path)
                 shutil.rmtree(stage_dir, ignore_errors=True)
+
+                # 显式清理 LazyFrame 引用并强制垃圾回收，防止跨年份连续流式处理内存叠加
+                del q, new_lazy, lazy_stages
+                if is_ts:
+                    del all_sources, new_unique
+                import gc
+                gc.collect()
+
+                logger.info(f"[+] [收敛落盘] 完成 {table_id} {year_name} 合并落盘, 耗时: {time.time() - t_start:.2f}s")
 
     def cleanup(self, table_id: str):
         """
@@ -286,9 +365,9 @@ class ParquetStorage(StorageManager):
         symbols = set()
         for parquet_file in table_dir.glob("year=*/data.parquet"):
             try:
-                # 仅扫描 symbol 列加速提取
-                df = pl.read_parquet(parquet_file, columns=["symbol"])
-                symbols.update(df["symbol"].unique().to_list())
+                # 流式去重提取 symbol，避免千万级行全量载入内存
+                df = pl.scan_parquet(str(parquet_file)).select("symbol").unique().collect()
+                symbols.update(df["symbol"].to_list())
             except Exception:
                 pass
         
