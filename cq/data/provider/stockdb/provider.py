@@ -94,6 +94,13 @@ class StockDBProvider(BaseProvider):
             stock_sdk.init(self.host, self.port, socket_timeout=self.timeout, warm=False)
             self._rd = stock_sdk.rd
 
+    def reset_connection(self):
+        """显式重置并排空底层 TCP 连接，清除 OS 接收缓冲区残留 (单次耗时 <1ms)"""
+        if stock_sdk is not None:
+            stock_sdk.init(self.host, self.port, socket_timeout=self.timeout, warm=False)
+            self._rd = stock_sdk.rd
+
+
     def _safe_query(
         self,
         query_func: Callable,
@@ -319,6 +326,9 @@ class StockDBProvider(BaseProvider):
         彻底消除底层 LevelDB 迭代器跨季度/跨年份的单次游标截断缺陷。
         时间戳格式为 14 位整数 (YYYYMMDDHHMMSS)，直接通过 time_shift_hours=0 标准化。
         """
+        # 进入超高频月度切片前物理重置连接，彻底排空 OS TCP 接收缓冲区，杜绝跨标的粘包与时序错位
+        self.reset_connection()
+
         raw_code = strip_symbol_prefix(symbol)
         norm_symbol = normalize_symbol(symbol)
 
